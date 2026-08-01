@@ -1,19 +1,39 @@
-### Health check
-GET https://jsonplaceholder.typicode.com/health?x=1
+### List users (GET)
+GET https://jsonplaceholder.typicode.com/users
 Accept: application/json
 
-### Get a user ({{user_id}} comes from the env file)
+### Get a user ({{user_id}} comes from examples/http-client.env.json)
 GET https://jsonplaceholder.typicode.com/users/{{user_id}}
 Accept: application/json
 
-### Create a user (POST with JSON body)
-POST https://jsonplaceholder.typicode.com/users
+### Create a post (POST with JSON body)
+POST https://jsonplaceholder.typicode.com/posts
 Content-Type: application/json
 
 {
-  "name": "{{name}}",
-  "job": "tester"
+  "title": "tuiter demo",
+  "body": "sent from neovim",
+  "userId": {{user_id}}
 }
+
+### Update a post (PUT)
+PUT https://jsonplaceholder.typicode.com/posts/1
+Content-Type: application/json
+
+{
+  "id": 1,
+  "title": "updated title",
+  "body": "updated body",
+  "userId": 1
+}
+
+### Delete a post (DELETE)
+DELETE https://jsonplaceholder.typicode.com/posts/1
+
+### 404 example — this endpoint does not exist
+# A 404 means the request reached the server fine, but the URL is wrong.
+# (jsonplaceholder has no /health, for example.) Not a network error.
+GET https://jsonplaceholder.typicode.com/health
 
 ### Local test server — start it with: python3 tests/server.py
 GET http://127.0.0.1:8999/api?x=1

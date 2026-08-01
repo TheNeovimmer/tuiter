@@ -63,7 +63,7 @@ function M.ensure_env(dir, opts)
 	table.sort(names)
 	local name = M.state.env
 	if not name or not envs[name] then
-		name = opts.default_env or names[1]
+		name = (opts.default_env and envs[opts.default_env] and opts.default_env) or names[1]
 	end
 	M.set_env(name, dir, opts)
 end

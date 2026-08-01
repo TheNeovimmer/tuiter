@@ -61,7 +61,7 @@ local f = io.open("examples/demo.http", "r")
 if f then
 	local content = f:read("*a")
 	f:close()
-	eq(#parser.parse_lines(vim.split(content, "\n")), 4, "demo requests")
+	eq(#parser.parse_lines(vim.split(content, "\n")), 7, "demo requests")
 end
 
 -- --- substitution ---
@@ -99,6 +99,18 @@ eq(cmd:match("'%-H' 'Content%-Type: application/json'") ~= nil, true, "curl head
 eq(cmd:match("'%-%-data%-binary' '{\"a\":1}'") ~= nil, true, "curl inline body")
 eq(cmd:match("tuiter") ~= nil, false, "no stats marker in curl command")
 eq(cmd:match("'@%-'") ~= nil, false, "no stdin placeholder in curl command")
+
+-- --- env default fallback ---
+local tmp = vim.fn.tempname() .. "/"
+vim.fn.mkdir(tmp, "p")
+vim.fn.writefile({ '{"dev":{"user_id":"7"},"prod":{"user_id":"9"}}' }, tmp .. "tuiter.env.json")
+client.state.env, client.state.env_file, client.state.env_vars = nil, nil, {}
+client.ensure_env(tmp, { env_files = { "tuiter.env.json" }, default_env = "default" })
+eq(client.state.env, "dev", "fallback to first env when default missing")
+eq(client.state.env_vars.user_id, "7", "fallback env vars")
+client.state.env, client.state.env_file = nil, nil
+client.ensure_env(tmp, { env_files = { "tuiter.env.json" }, default_env = "prod" })
+eq(client.state.env, "prod", "default_env wins when present")
 
 -- --- pretty json ---
 eq(client.pretty_json('{"a":1,"b":[1,2]}'), '{\n  "a": 1,\n  "b": [\n    1,\n    2\n  ]\n}', "pretty")

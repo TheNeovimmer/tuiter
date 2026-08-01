@@ -53,9 +53,11 @@ Content-Type: application/json
 }
 ```
 
-> Try it locally: `~/Documents/tuiter/examples/demo.http` (or
-> `examples/` in this repo) works against a public API. For offline testing,
-> start `python3 tests/server.py` and run the last request in the file.
+> Try it locally: `examples/demo.http` works against a public API. For
+> offline testing, start `python3 tests/server.py` and run the last request.
+> The second-to-last request hits a deliberately nonexistent endpoint so
+> you can see how a 404 looks — it means the request reached the server
+> fine, the URL just doesn't exist (not a network error).
 
 ### Request file format
 
