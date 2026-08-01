@@ -1,0 +1,19 @@
+### Health check
+GET https://jsonplaceholder.typicode.com/health?x=1
+Accept: application/json
+
+### Get a user ({{user_id}} comes from the env file)
+GET https://jsonplaceholder.typicode.com/users/{{user_id}}
+Accept: application/json
+
+### Create a user (POST with JSON body)
+POST https://jsonplaceholder.typicode.com/users
+Content-Type: application/json
+
+{
+  "name": "{{name}}",
+  "job": "tester"
+}
+
+### Local test server — start it with: python3 tests/server.py
+GET http://127.0.0.1:8999/api?x=1

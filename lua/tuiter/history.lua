@@ -1,0 +1,76 @@
+--- Request history, persisted to stdpath("data")/tuiter/history.json.
+local M = {}
+
+local MAX = 200
+
+local function file()
+	return vim.fn.stdpath("data") .. "/tuiter/history.json"
+end
+
+function M.load()
+	local f = file()
+	if vim.fn.filereadable(f) == 0 then
+		return {}
+	end
+	local ok, data = pcall(vim.json.decode, table.concat(vim.fn.readfile(f), "\n"))
+	if not ok or type(data) ~= "table" then
+		return {}
+	end
+	return data
+end
+
+function M.add(spec, resp)
+	local h = M.load()
+	table.insert(h, 1, {
+		ts = os.time(),
+		method = spec.method,
+		url = spec.url,
+		name = spec.name or "",
+		status = resp.status,
+		time = resp.time,
+		size = resp.size,
+		spec = {
+			method = spec.method,
+			url = spec.url,
+			headers = spec.headers,
+			body = spec.body,
+			vars = spec.vars,
+			name = spec.name or "",
+			cwd = spec.cwd,
+		},
+	})
+	while #h > MAX do
+		table.remove(h)
+	end
+	vim.fn.mkdir(vim.fn.stdpath("data") .. "/tuiter", "p")
+	pcall(vim.fn.writefile, { vim.json.encode(h) }, file())
+end
+
+--- Pick an entry via vim.ui.select (integrates with the user's picker),
+--- then call cb(entry.spec) with the stored request.
+function M.pick(cb)
+	local h = M.load()
+	if #h == 0 then
+		vim.notify("Tuiter: history is empty", vim.log.levels.INFO, { title = "Tuiter" })
+		return
+	end
+	vim.ui.select(h, {
+		prompt = "Tuiter history",
+		format_item = function(e)
+			return string.format(
+				"%s %-6s %s  %s%s",
+				os.date("%m-%d %H:%M", e.ts),
+				e.method,
+				e.url,
+				e.name ~= "" and ("(" .. e.name .. ") ") or "",
+				e.status and ("[HTTP " .. e.status .. "]") or ""
+			)
+		end,
+	}, function(entry)
+		if entry then
+			cb(entry.spec)
+		end
+	end)
+end
+
+return M

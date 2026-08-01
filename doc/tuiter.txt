@@ -1,0 +1,176 @@
+*tuiter.txt*        Interactive API explorer for Neovim
+
+==============================================================================
+CONTENTS                                        *tuiter-contents*
+
+  1. Introduction ............ |tuiter-intro|
+  2. Installation ............ |tuiter-install|
+  3. Quick start ............. |tuiter-quickstart|
+  4. Request files ........... |tuiter-format|
+  5. Variables & environments |tuiter-env|
+  6. Commands ................ |tuiter-commands|
+  7. Keymaps ................. |tuiter-keymaps|
+  8. Configuration ........... |tuiter-config|
+  9. API ..................... |tuiter-api|
+
+==============================================================================
+INTRODUCTION                                    *tuiter-intro*
+
+tuiter is an interactive API explorer for Neovim. Write HTTP requests in
+.http files (REST Client format), send them with one key, and inspect the
+response in a floating window. Built-in request history and environment
+variables make it a lightweight Postman/Insomnia replacement that stays in
+your editor.
+
+Features:
+
+- Parse `.http` request files (methods, headers, bodies, `###` sections)
+- Async requests via `curl` (no external dependencies beyond curl)
+- Response window with status, headers, and JSON-pretty-printed body
+- JSON bodies highlighted with treesitter
+- Request history with replay (`vim.ui.select` powered picker)
+- Environment variables from `http-client.env.json` / `tuiter.env.json`
+- Request-scoped `@var` definitions
+
+==============================================================================
+INSTALLATION                                    *tuiter-install*
+
+With lazy.nvim (LazyVim): ~
+
+    {
+      dir = "~/path/to/tuiter",          -- or a git remote
+      cmd = { "Tuiter", "TuiterRun", "TuiterHistory", "TuiterEnv" },
+      ft = "http",
+      opts = {},
+    }
+
+Requires Neovim >= 0.10 and curl.
+
+==============================================================================
+QUICK START                                     *tuiter-quickstart*
+
+1. Open a `.http` file (filetype is detected automatically).
+2. Put the cursor on a request line: ~
+
+       ### Get users
+       GET https://api.example.com/users
+       Accept: application/json
+
+3. Press `<leader>ht` (or `:TuiterRun`) to send it.
+4. Read the response: headers on top, body below. `t` toggles the headers
+   window, `r` resends, `q` closes.
+
+==============================================================================
+REQUEST FILES                                   *tuiter-format*
+
+Requests use the REST Client format. A file holds many requests separated
+by `###` (optionally followed by a name): ~
+
+    ### Get user
+    GET https://api.example.com/users/1
+    Authorization: Bearer {{token}}
+
+    ### Create user
+    POST https://api.example.com/users
+    Content-Type: application/json
+
+    {
+      "name": "ada"
+    }
+
+- The first line of a request is `METHOD URL` (GET is assumed when omitted).
+- Header lines are `Name: value`.
+- After an empty line, everything until the next `###` is the request body.
+- Lines starting with `#` are comments.
+- `@name = value` lines define request-scoped variables.
+
+==============================================================================
+VARIABLES & ENVIRONMENTS                        *tuiter-env*
+
+`{{name}}` placeholders are replaced when a request is sent. Resolution
+order: request-scoped `@name` vars, the selected environment, then your
+shell environment (os env). Unresolved placeholders are left as-is.
+
+Environment files: `http-client.env.json` or `tuiter.env.json`, searched
+from the request file's directory upward. Format (http-client compatible):
+
+    {
+      "dev":  { "token": "dev-token" },
+      "prod": { "token": "prod-token" }
+    }
+
+- `:TuiterEnv` (or `<leader>he`) picks the active environment.
+- The `default` environment (or the first key) is auto-selected on the
+  first request in a project that has an env file.
+
+==============================================================================
+COMMANDS                                        *tuiter-commands*
+
+                                                *:Tuiter*
+:Tuiter                 Toggle the response window (re-shows last response).
+
+                                                *:TuiterRun*
+:TuiterRun [lnum]       Send the request under the cursor. An optional line
+                        number sends the request at that line.
+
+                                                *:TuiterHistory*
+:TuiterHistory          Pick a past request from history and re-run it.
+
+                                                *:TuiterEnv*
+:TuiterEnv              Select the active environment.
+
+==============================================================================
+KEYMAPS                                         *tuiter-keymaps*
+
+Buffer-local to `.http` files (disable with `keymaps = false` in |tuiter-config|):
+
+    <leader>ht  Send request under cursor
+    <leader>hh  Request history
+    <leader>he  Select environment
+    <leader>hc  Toggle response window
+
+In the response window:
+
+    q   Close response
+    t   Toggle headers window
+    r   Resend the request
+
+==============================================================================
+CONFIGURATION                                   *tuiter-config*
+
+    require("tuiter").setup({
+      keymaps = { run = "<leader>ht", history = "<leader>hh", env = "<leader>he", toggle = "<leader>hc" },
+      curl = { timeout = 30, insecure = false, max_redirects = 8 },
+      env_files = { "http-client.env.json", "tuiter.env.json" },
+      default_env = "default",
+    })
+
+- `keymaps`: table of mappings, or `false` to register none.
+- `curl.timeout`: seconds before aborting a request.
+- `curl.insecure`: pass `-k` to curl (self-signed certs).
+- `curl.max_redirects`: follow redirects up to N hops (0 disables).
+- `env_files`: env file names to look for, in order.
+- `default_env`: env auto-selected on first use in a project.
+
+Highlights: ~
+
+    TuiterOk       status line tint for success (links DiagnosticOk)
+    TuiterError    status line tint for errors  (links DiagnosticError)
+
+==============================================================================
+API                                                 *tuiter-api*
+
+    require("tuiter").run({ buf = 0, lnum = nil })
+    require("tuiter").resend(spec)
+    require("tuiter").history()
+    require("tuiter").select_env({ cwd = nil })
+    require("tuiter").toggle_response()
+    require("tuiter").close_response()
+    require("tuiter").setup(opts)
+
+==============================================================================
+TESTING                                         *tuiter-testing*
+
+    make test   # unit + integration tests (headless nvim + local server)
+
+vim:tw=78:ts=8:noet:ft=help:norl:
