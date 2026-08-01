@@ -85,6 +85,21 @@ eq(fail.ok, false, "fail ok flag")
 eq(fail.status, 0, "fail status")
 eq(fail.error:match("Failed to connect") ~= nil, true, "fail stderr")
 
+-- --- copy as curl ---
+local cmd = client.curl_command({
+	method = "POST",
+	url = "http://x.test/{{token}}",
+	headers = { ["Content-Type"] = "application/json" },
+	body = '{"a":1}',
+	vars = { token = "T" },
+}, { timeout = 30 })
+eq(cmd:match("'-X' 'POST'") ~= nil, true, "curl method")
+eq(cmd:match("http://x%.test/T'") ~= nil, true, "curl substituted url")
+eq(cmd:match("'%-H' 'Content%-Type: application/json'") ~= nil, true, "curl header")
+eq(cmd:match("'%-%-data%-binary' '{\"a\":1}'") ~= nil, true, "curl inline body")
+eq(cmd:match("tuiter") ~= nil, false, "no stats marker in curl command")
+eq(cmd:match("'@%-'") ~= nil, false, "no stdin placeholder in curl command")
+
 -- --- pretty json ---
 eq(client.pretty_json('{"a":1,"b":[1,2]}'), '{\n  "a": 1,\n  "b": [\n    1,\n    2\n  ]\n}', "pretty")
 eq(client.pretty_json("not json"), nil, "invalid json")

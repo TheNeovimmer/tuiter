@@ -23,5 +23,4 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
 
-
 HTTPServer(("127.0.0.1", 8999), Handler).serve_forever()

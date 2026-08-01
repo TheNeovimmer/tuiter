@@ -50,11 +50,22 @@ assert(p.status == 201, "POST status: " .. vim.inspect(p))
 assert(vim.json.decode(p.body).echo == '{"hello":"world"}', "POST echo: " .. vim.inspect(p.body))
 
 -- response UI opens/closes headlessly
-ui.show(g, spec, function() end)
+ui.show(g, spec, {})
 assert(ui.state.body_win and vim.api.nvim_win_is_valid(ui.state.body_win), "body window missing")
 assert(ui.state.head_win and vim.api.nvim_win_is_valid(ui.state.head_win), "headers window missing")
 ui.close()
 assert(not (ui.state.body_win and vim.api.nvim_win_is_valid(ui.state.body_win)), "close failed")
+
+-- sidebar opens/closes
+local parser = require("tuiter.parser")
+ui.show_sidebar(parser.parse_lines({ "### Get", "GET http://127.0.0.1:8999/api", "" }), {
+	title = "test",
+	run = function() end,
+	go_to = function() end,
+})
+assert(ui.sidebar_is_open(), "sidebar open")
+ui.close_sidebar()
+assert(not ui.sidebar_is_open(), "sidebar close")
 
 server:kill()
 print("ALL INTEGRATION TESTS PASSED")

@@ -112,11 +112,9 @@ function M.parse_response(stdout, stderr, exit_code, marker)
 	return resp
 end
 
---- Send a request via curl (async).
---- spec: { method, url, headers={k=v}, body=nil|string, vars={k=v} }
-function M.send(spec, curl_opts, cwd, cb)
-	seq = seq + 1
-	local marker = "@@tuiter" .. seq .. "@@"
+--- Build the curl argv for a spec. When `marker` is given, a write-out
+--- stats line is appended (used by send; nil for the human "copy as curl").
+function M.curl_args(spec, curl_opts, marker)
 	local args = { "curl", "-sS", "-i", "-X", spec.method, "--max-time", tostring(curl_opts.timeout or 30) }
 	if curl_opts.insecure then
 		vim.list_extend(args, { "-k" })
@@ -132,18 +130,45 @@ function M.send(spec, curl_opts, cwd, cb)
 	for _, h in ipairs(headers) do
 		vim.list_extend(args, { "-H", h })
 	end
-	local body = spec.body and M.substitute(spec.body, spec.vars) or nil
-	if body and body ~= "" then
+	if spec.body and spec.body ~= "" then
 		vim.list_extend(args, { "--data-binary", "@-" })
 	end
-	vim.list_extend(args, {
-		"-w",
-		"\n" .. marker .. " %{http_code} %{time_total} %{size_download}",
-		M.substitute(spec.url, spec.vars),
-	})
+	if marker then
+		vim.list_extend(args, { "-w", "\n" .. marker .. " %{http_code} %{time_total} %{size_download}" })
+	end
+	vim.list_extend(args, { M.substitute(spec.url, spec.vars) })
+	return args
+end
+
+--- Send a request via curl (async).
+--- spec: { method, url, headers={k=v}, body=nil|string, vars={k=v} }
+function M.send(spec, curl_opts, cwd, cb)
+	seq = seq + 1
+	local marker = "@@tuiter" .. seq .. "@@"
+	local args = M.curl_args(spec, curl_opts, marker)
+	local body = spec.body and M.substitute(spec.body, spec.vars) or nil
 	vim.system(args, { text = true, stdin = body or "" }, function(out)
 		cb(M.parse_response(out.stdout, out.stderr, out.code, marker))
 	end)
+end
+
+local function shq(s) -- single-quote for shell, escaping embedded quotes
+	return "'" .. s:gsub("'", "'\\''") .. "'"
+end
+
+--- Shell-safe curl command for a spec (Insomnia's "copy as curl").
+function M.curl_command(spec, curl_opts)
+	local args = M.curl_args(spec, curl_opts, nil)
+	local body = spec.body and M.substitute(spec.body, spec.vars) or nil
+	local parts = {}
+	for _, a in ipairs(args) do
+		if a == "@-" then
+			parts[#parts + 1] = shq(body or "")
+		else
+			parts[#parts + 1] = shq(a)
+		end
+	end
+	return table.concat(parts, " ")
 end
 
 --- Pretty-print a JSON string (nil when it doesn't parse).

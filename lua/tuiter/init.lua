@@ -1,5 +1,5 @@
 --- tuiter: interactive API explorer for Neovim.
---- Public API + wiring: config, run/resend, history, env, response toggle.
+--- Public API + wiring: config, run/resend, sidebar, history, env, response.
 local parser = require("tuiter.parser")
 local client = require("tuiter.client")
 local ui = require("tuiter.ui")
@@ -9,10 +9,11 @@ local M = {}
 
 local config = {
 	keymaps = {
-		run = "<leader>ht", -- send request under cursor
-		history = "<leader>hh",
-		env = "<leader>he",
-		toggle = "<leader>hc",
+		run = "<leader>is", -- send request under cursor
+		list = "<leader>il", -- request sidebar (Postman-style)
+		history = "<leader>ih",
+		env = "<leader>ie",
+		response = "<leader>ir", -- toggle response window
 	},
 	curl = { timeout = 30, insecure = false, max_redirects = 8 },
 	env_files = { "http-client.env.json", "tuiter.env.json" },
@@ -30,12 +31,19 @@ end
 function M.resend(spec)
 	local cwd = spec.cwd or vim.fn.getcwd()
 	client.ensure_env(cwd, config)
+	spec.env = client.state.env
 	vim.notify(string.format("Tuiter: %s %s", spec.method, spec.url), vim.log.levels.INFO, { title = "Tuiter" })
 	client.send(spec, config.curl, cwd, function(resp)
 		vim.schedule(function()
-			ui.show(resp, spec, function()
-				M.resend(spec)
-			end)
+			ui.show(resp, spec, {
+				resend = function()
+					M.resend(spec)
+				end,
+				copy_curl = function()
+					vim.fn.setreg('"', client.curl_command(spec, config.curl))
+					vim.notify("Tuiter: curl command copied", vim.log.levels.INFO, { title = "Tuiter" })
+				end,
+			})
 			history.add(spec, resp)
 		end)
 	end)
@@ -53,9 +61,44 @@ function M.run(opts)
 		vim.notify("Tuiter: no request found under cursor", vim.log.levels.WARN, { title = "Tuiter" })
 		return
 	end
+	M.source_buf = buf
 	spec.buf = buf
 	spec.cwd = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(buf), ":p:h")
 	M.resend(spec)
+end
+
+--- Open (or close) the request sidebar for the current .http buffer.
+function M.sidebar()
+	if ui.sidebar_is_open() then
+		ui.close_sidebar()
+		return
+	end
+	local buf = vim.api.nvim_get_current_buf()
+	if vim.bo[buf].buftype ~= "" then
+		-- inside a scratch/response buffer: reuse the last http buffer
+		buf = M.source_buf or 0
+	end
+	local requests = parser.parse_lines(vim.api.nvim_buf_get_lines(buf, 0, -1, false))
+	if #requests == 0 then
+		vim.notify("Tuiter: no requests in this buffer", vim.log.levels.WARN, { title = "Tuiter" })
+		return
+	end
+	local dir = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(buf), ":p:h")
+	client.ensure_env(dir, config)
+	ui.show_sidebar(requests, {
+		title = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(buf), ":t"),
+		env = client.state.env,
+		run = function(spec)
+			spec.cwd = dir
+			M.resend(spec)
+		end,
+		go_to = function(lnum)
+			if vim.api.nvim_buf_is_valid(buf) then
+				vim.api.nvim_set_current_buf(buf)
+				vim.api.nvim_win_set_cursor(0, { lnum, 0 })
+			end
+		end,
+	})
 end
 
 --- Pick a past request from history and re-run it.
@@ -109,6 +152,9 @@ function M.setup_keymaps(buf)
 			M.run({ buf = buf })
 		end, "Send request under cursor")
 	end
+	if km.list then
+		map(km.list, M.sidebar, "Request sidebar")
+	end
 	if km.history then
 		map(km.history, M.history, "Request history")
 	end
@@ -117,8 +163,8 @@ function M.setup_keymaps(buf)
 			M.select_env({ cwd = dir })
 		end, "Select environment")
 	end
-	if km.toggle then
-		map(km.toggle, M.toggle_response, "Toggle response")
+	if km.response then
+		map(km.response, M.toggle_response, "Toggle response")
 	end
 end
 

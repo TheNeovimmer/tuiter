@@ -25,8 +25,10 @@ your editor.
 Features:
 
 - Parse `.http` request files (methods, headers, bodies, `###` sections)
+- Postman-style request sidebar listing every request in the file
 - Async requests via `curl` (no external dependencies beyond curl)
 - Response window with status, headers, and JSON-pretty-printed body
+- Pretty/raw JSON toggle, copy body, copy-as-curl
 - JSON bodies highlighted with treesitter
 - Request history with replay (`vim.ui.select` powered picker)
 - Environment variables from `http-client.env.json` / `tuiter.env.json`
@@ -56,9 +58,12 @@ QUICK START                                     *tuiter-quickstart*
        GET https://api.example.com/users
        Accept: application/json
 
-3. Press `<leader>ht` (or `:TuiterRun`) to send it.
+3. Press `<leader>is` (or `:TuiterRun`) to send it.
 4. Read the response: headers on top, body below. `t` toggles the headers
-   window, `r` resends, `q` closes.
+   window, `p` toggles pretty/raw JSON, `y` copies the body, `c` copies a
+   curl command, `r` resends, `q` closes.
+5. Press `<leader>il` (or `:Tuiter`) for a Postman-style sidebar listing
+   every request in the file: `<CR>` runs, `g` jumps to the source line.
 
 ==============================================================================
 REQUEST FILES                                   *tuiter-format*
@@ -107,7 +112,8 @@ from the request file's directory upward. Format (http-client compatible):
 COMMANDS                                        *tuiter-commands*
 
                                                 *:Tuiter*
-:Tuiter                 Toggle the response window (re-shows last response).
+:Tuiter                 Toggle the request sidebar (list of requests in the
+                        current file).
 
                                                 *:TuiterRun*
 :TuiterRun [lnum]       Send the request under the cursor. An optional line
@@ -119,27 +125,46 @@ COMMANDS                                        *tuiter-commands*
                                                 *:TuiterEnv*
 :TuiterEnv              Select the active environment.
 
+                                                *:TuiterResponse*
+:TuiterResponse         Toggle the response window (re-shows last response).
+
 ==============================================================================
 KEYMAPS                                         *tuiter-keymaps*
 
-Buffer-local to `.http` files (disable with `keymaps = false` in |tuiter-config|):
+Buffer-local to `.http` files (disable with `keymaps = false` in
+|tuiter-config|). The `<leader>i` group is unused by LazyVim and never
+clashes with harpoon (`<leader>h`/`<leader>H`) or the http-client plugins
+(`<leader>ht`):
 
-    <leader>ht  Send request under cursor
-    <leader>hh  Request history
-    <leader>he  Select environment
-    <leader>hc  Toggle response window
+    <leader>is  Send request under cursor
+    <leader>il  Request sidebar
+    <leader>ih  Request history
+    <leader>ie  Select environment
+    <leader>ir  Toggle response window
+
+In the request sidebar:
+
+    <CR>  Run the request under the cursor
+    g     Jump to the request in the source file
+    q     Close
 
 In the response window:
 
     q   Close response
     t   Toggle headers window
+    p   Toggle pretty/raw JSON body
+    y   Copy body to the clipboard register
+    c   Copy as curl command
     r   Resend the request
 
 ==============================================================================
 CONFIGURATION                                   *tuiter-config*
 
     require("tuiter").setup({
-      keymaps = { run = "<leader>ht", history = "<leader>hh", env = "<leader>he", toggle = "<leader>hc" },
+      keymaps = {
+        run = "<leader>is", list = "<leader>il", history = "<leader>ih",
+        env = "<leader>ie", response = "<leader>ir",
+      },
       curl = { timeout = 30, insecure = false, max_redirects = 8 },
       env_files = { "http-client.env.json", "tuiter.env.json" },
       default_env = "default",
@@ -160,13 +185,14 @@ Highlights: ~
 ==============================================================================
 API                                                 *tuiter-api*
 
+    require("tuiter").setup(opts)
     require("tuiter").run({ buf = 0, lnum = nil })
     require("tuiter").resend(spec)
+    require("tuiter").sidebar()
     require("tuiter").history()
     require("tuiter").select_env({ cwd = nil })
     require("tuiter").toggle_response()
     require("tuiter").close_response()
-    require("tuiter").setup(opts)
 
 ==============================================================================
 TESTING                                         *tuiter-testing*
