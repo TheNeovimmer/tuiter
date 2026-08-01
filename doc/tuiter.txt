@@ -153,7 +153,7 @@ In the response window:
     q   Close response
     t   Toggle headers window
     p   Toggle pretty/raw JSON body
-    y   Copy body to the clipboard register
+    y   Copy body to the yank register
     c   Copy as curl command
     r   Resend the request
 

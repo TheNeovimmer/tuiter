@@ -53,6 +53,32 @@ Content-Type: application/json
 }
 ```
 
+> Try it locally: `~/Documents/tuiter/examples/demo.http` (or
+> `examples/` in this repo) works against a public API. For offline testing,
+> start `python3 tests/server.py` and run the last request in the file.
+
+### Request file format
+
+REST Client style, many requests per file:
+
+- `### Name` starts a new request (optional name); a bare `METHOD URL` line
+  also starts one without a name
+- First line: `METHOD URL` — `GET` is implied when the method is omitted
+- `Header: value` lines until the first blank line
+- After the blank line, everything until the next `###` is the request body
+- `#` lines are comments; `@name = value` lines define request-scoped
+  variables (usable as `{{name}}`)
+
+```http
+### Auth
+@token = abc123
+POST https://api.example.com/login
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{"user": "ada"}
+```
+
 ### Keymaps (`.http` files, `<leader>i` group)
 
 | Key | Action |
@@ -65,8 +91,9 @@ Content-Type: application/json
 
 ### Request sidebar (`<leader>il` / `:Tuiter`)
 
-Lists every request in the file — method (color-coded), name, URL, and the
-last response status. `<CR>` runs, `g` jumps to the source line, `q` closes.
+Lists every request in the file — method (color-coded: GET green,
+POST blue, PUT/PATCH yellow, DELETE red), name, URL, and the last response
+status. `<CR>` runs, `g` jumps to the source line, `q` closes.
 
 ### Response window
 
@@ -79,7 +106,7 @@ active environment.
 | `q` | Close response |
 | `t` | Toggle headers window |
 | `p` | Toggle pretty / raw JSON body |
-| `y` | Copy body to clipboard register |
+| `y` | Copy body to the yank register |
 | `c` | Copy as curl command (Insomnia-style) |
 | `r` | Resend the request |
 
@@ -102,6 +129,44 @@ active environment.
 | `:TuiterHistory` | Pick a past request and re-run it |
 | `:TuiterEnv` | Select environment |
 | `:TuiterResponse` | Toggle response window |
+
+## How it works
+
+```
+<leader>is on a .http file
+      │
+      ▼
+parser.lua        parse buffer → request spec {method, url, headers, body, vars}
+      │
+      ▼
+client.lua        substitute {{vars}} → curl_args() → vim.system(curl, async)
+      │
+      ▼
+client.lua        parse_response() splits headers/body + status/time/size
+      │  (vim.schedule — curl callbacks fire in a fast-event context,
+      │   deferred to the main loop before touching windows)
+      ▼
+ui.lua            show(): pretty-print JSON → treesitter json → two floats
+history.lua       append to stdpath("data")/tuiter/history.json
+```
+
+- Requests go out via `curl` over `vim.system` — never blocks the editor
+- The parser is pure Lua (no `vim.*`), so it runs in plain headless tests
+- Everything is lazy-loaded: the module chain only loads when you use a
+  `Tuiter*` command or open a `.http` file
+
+## Public API
+
+```lua
+require("tuiter").setup(opts)            -- configure (idempotent)
+require("tuiter").run({ buf, lnum })     -- send request under cursor
+require("tuiter").resend(spec)           -- send a spec directly
+require("tuiter").sidebar()              -- toggle request sidebar
+require("tuiter").history()              -- pick from history & re-run
+require("tuiter").select_env({ cwd })    -- choose environment
+require("tuiter").toggle_response()      -- show/hide response window
+require("tuiter").close_response()
+```
 
 ## Environment variables
 
