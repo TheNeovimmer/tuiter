@@ -21,7 +21,7 @@ end
 
 function M.add(spec, resp)
 	local h = M.load()
-	table.insert(h, 1, {
+	local entry = {
 		ts = os.time(),
 		method = spec.method,
 		url = spec.url,
@@ -38,7 +38,15 @@ function M.add(spec, resp)
 			name = spec.name or "",
 			cwd = spec.cwd,
 		},
-	})
+	}
+	-- dedupe consecutive identical requests: refresh the head entry instead
+	-- of piling up (e.g. repeated <leader>is on the same request)
+	local head = h[1]
+	if head and head.method == entry.method and head.url == entry.url and (head.spec.body or "") == (spec.body or "") then
+		head.ts, head.status, head.time, head.size = entry.ts, entry.status, entry.time, entry.size
+	else
+		table.insert(h, 1, entry)
+	end
 	while #h > MAX do
 		table.remove(h)
 	end

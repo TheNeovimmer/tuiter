@@ -218,3 +218,139 @@ eq(table.concat(tl, "\n"):match("Size%s+12B") ~= nil, true, "timeline size")
 eq(table.concat(tl, "\n"):match("Redirects%s+1") ~= nil, true, "timeline redirects")
 eq(table.concat(tl, "\n"):match("Protocol%s+HTTP/1.1") ~= nil, true, "timeline protocol")
 eq(table.concat(tl, "\n"):match("Content type%s+application/json") ~= nil, true, "timeline content type")
+
+-- --- request directives (# @timeout, # @no-redirect, # @no-log) ---
+local dirs = parser.parse_lines({
+	"### A",
+	"GET https://x.test/1",
+	"# @timeout 5",
+	"# @no-redirect",
+	"# @no-log",
+})
+eq(dirs[1].opts.timeout, "5", "directive timeout")
+eq(dirs[1].opts.no_redirect, true, "directive no-redirect")
+eq(dirs[1].opts.no_log, true, "directive no-log")
+
+-- --- validation ---
+eq(#parser.validate({ "### ok", "GET https://x.test/", "Accept: */*", "", "body" }), 0, "validate clean file")
+local v = parser.validate({ "GET", "ftp://nope/", "Accept: */*" })
+eq(v[1] and v[1].msg:match("missing a URL") ~= nil, true, "validate bare method")
+eq(v[2] and v[2].msg:match("does not start with http") ~= nil, true, "validate bad scheme")
+
+-- --- graphql parsing ---
+local gql = require("tuiter.graphql").parse({
+	"# @url http://127.0.0.1:8999/graphql",
+	"",
+	"query GetUser($id: ID!) {",
+	"  user(id: $id) { name }",
+	"}",
+	"",
+	"mutation UpdateUser {",
+	'  updateUser(input: {name: "ada"}) { id }',
+	"}",
+})
+eq(#gql, 2, "graphql two operations")
+eq(gql[1].name, "GetUser", "graphql query name")
+eq(gql[1].method, "POST", "graphql POST")
+eq(gql[1].url, "http://127.0.0.1:8999/graphql", "graphql url from directive")
+eq(vim.json.decode(gql[1].body).query:match("user%(id") ~= nil, true, "graphql query body")
+eq(vim.json.decode(gql[2].body).query:match("updateUser") ~= nil, true, "graphql mutation body")
+local gql2 = require("tuiter.graphql").parse({ "# @url http://x.test/", "", '# @variables {"a":1}', "query Q { x }" })
+eq(vim.json.decode(gql2[1].body).variables.a, 1, "graphql variables directive")
+
+-- --- new dynamic vars ---
+eq(
+	client.substitute("{{$isoTimestamp}}", {}):match("^%d%d%d%d%-%d%d%-%d%dT%d%d:%d%d:%d%dZ$") ~= nil,
+	true,
+	"iso timestamp"
+)
+eq(#client.substitute("{{$randomAlphaNumeric}}", {}), 16, "random alphanumeric length")
+eq(client.substitute("{{$randomEmail}}", {}):match("@example.com$") ~= nil, true, "random email")
+client.record_response({ body = "raw text", status = 200 })
+eq(client.substitute("{{$body}}", {}), "raw text", "raw body var")
+
+-- --- body modes + cookie jar + compressed in curl args ---
+local a = client.curl_args({
+	method = "POST",
+	url = "http://x.test/",
+	headers = { ["Content-Type"] = "multipart/form-data" },
+	body = "name=ada\nrole=admin",
+	vars = {},
+	cwd = ".",
+}, { cookie_jar = true })
+eq(vim.tbl_contains(a, "-F") and vim.tbl_contains(a, "name=ada"), true, "multipart -F fields")
+eq(vim.tbl_contains(a, "--data-binary"), false, "multipart no data-binary")
+eq(vim.tbl_contains(a, "--compressed"), true, "compressed default")
+eq(vim.tbl_contains(a, "-c") and vim.tbl_contains(a, "-b"), true, "cookie jar flags")
+eq(a[vim.fn.index(a, "-c") + 2]:match("cookies/.*%.txt") ~= nil, true, "cookie jar path")
+local ue = client.curl_args({
+	method = "POST",
+	url = "http://x.test/",
+	headers = { ["Content-Type"] = "application/x-www-form-urlencoded" },
+	body = "name=ada\nrole=admin",
+	vars = {},
+	cwd = nil,
+}, { cookie_jar = false })
+eq(vim.tbl_contains(ue, "--data-urlencode") and vim.tbl_contains(ue, "name=ada"), true, "urlencoded --data-urlencode")
+eq(vim.tbl_contains(ue, "-c"), false, "cookie jar disabled")
+-- per-request timeout + no-redirect override
+local pr = client.curl_args({
+	method = "GET",
+	url = "http://x.test/",
+	headers = {},
+	body = nil,
+	vars = {},
+	opts = { timeout = "5", no_redirect = true },
+	cwd = nil,
+}, { timeout = 30, max_redirects = 8, cookie_jar = false })
+eq(pr[vim.fn.index(pr, "--max-time") + 2], "5", "per-request timeout")
+eq(vim.tbl_contains(pr, "-L"), false, "no-redirect skips -L")
+
+-- --- code snippets ---
+local cg = require("tuiter.codegen")
+local spec = {
+	method = "POST",
+	url = "http://x.test/{{token}}",
+	headers = { ["Content-Type"] = "application/json" },
+	body = '{"a":1}',
+	vars = { token = "T" },
+}
+local py = cg.generate("python", spec, {})
+eq(py:match("import requests") ~= nil, true, "python imports")
+eq(py:match('url = "http://x%.test/T"') ~= nil, true, "python substituted url")
+eq(py:match('requests%.request%(%-%-"POST"') == nil, true, "python request call") -- placeholder, replaced below
+eq(py:match("json%.dumps%(payload%)") ~= nil, true, "python json body")
+local js = cg.generate("js", spec, {})
+eq(js:match("fetch%(url, options%)") ~= nil, true, "js fetch")
+eq(js:match('method: "POST"') ~= nil, true, "js method")
+local go = cg.generate("go", spec, {})
+eq(go:match("http%.NewRequest") ~= nil, true, "go NewRequest")
+eq(go:match('url := "http://x%.test/T"') ~= nil, true, "go substituted url")
+eq(cg.generate("curl", spec, {}):match("http://x%.test/T'") ~= nil, true, "curl snippet")
+
+-- --- history dedupe ---
+local hst = require("tuiter.history")
+local hfile = vim.fn.stdpath("data") .. "/tuiter/history.json"
+vim.fn.mkdir(vim.fn.stdpath("data") .. "/tuiter", "p")
+vim.fn.writefile({ "[]" }, hfile)
+local saved = vim.fn.filereadable(hfile) == 1 and vim.fn.readfile(hfile) or nil
+hst.add(
+	{ method = "GET", url = "http://x.test/1", name = "", headers = {}, body = nil, vars = {}, cwd = "." },
+	{ status = 200, time = 0.1, size = 1 }
+)
+hst.add(
+	{ method = "GET", url = "http://x.test/1", name = "", headers = {}, body = nil, vars = {}, cwd = "." },
+	{ status = 200, time = 0.2, size = 1 }
+)
+eq(#hst.load(), 1, "history dedupes consecutive identical")
+eq(hst.load()[1].time, 0.2, "history keeps latest time")
+hst.add(
+	{ method = "POST", url = "http://x.test/2", name = "", headers = {}, body = "{}", vars = {}, cwd = "." },
+	{ status = 201, time = 0.1, size = 2 }
+)
+eq(#hst.load(), 2, "history keeps distinct")
+if saved then
+	vim.fn.writefile(saved, hfile)
+else
+	os.remove(hfile)
+end

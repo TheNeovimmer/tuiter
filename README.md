@@ -1,5 +1,7 @@
 # tuiter
 
+[![CI](https://github.com/TheNeovimmer/tuiter/actions/workflows/ci.yml/badge.svg)](https://github.com/TheNeovimmer/tuiter/actions/workflows/ci.yml)
+
 Interactive API explorer for Neovim. Write requests in `.http` files, send
 them with one key, read the response in a floating window — with a
 Postman-style request sidebar, collections runner, history, environments,
@@ -17,10 +19,14 @@ Insomnia/Postman for your editor, written in pure Lua.
 - **Timeline tab** — per-phase timing breakdown (DNS, TCP, TLS, TTFB, download) from curl
 - **Status bar** — HTTP code · time · size · env, green/red, in every response window
 - **Dynamic variables** — `{{$timestamp}}`, `{{$uuid}}`, `{{$randomInt}}`, … and response chaining via `{{$body.path.to.field}}`
-- **Copy as curl** — Insomnia-style shell-safe curl command, one key
-- **History** — every request is stored and replayable from a picker
+- **Copy as curl / code snippets** — Insomnia-style shell-safe curl command, plus `:TuiterCopyAs python|js|go` for real code
+- **GraphQL files** — `.graphql`/`.gql` buffers: each operation becomes a POST with `{"query", "variables"}` from `# @url` / `# @variables`
+- **Form bodies** — `multipart/form-data` (`-F`) and `application/x-www-form-urlencoded` (`--data-urlencode`) are sent as proper fields
+- **Cookie jar** — per-project persisted cookies (`-c`/`-b`), so login → follow-up requests just work
+- **History** — every request is stored and replayable from a picker (consecutive duplicates collapse)
 - **Environments** — `http-client.env.json` / `tuiter.env.json` with `{{var}}` substitution
 - **Omni-completion** — `<C-x><C-o>` completes `{{…}}` from request vars, env vars, and dynamic values
+- **Diagnostics** — malformed requests (missing URL, bad scheme, header/body mistakes) show as LSP-style warnings while you edit
 - **LazyVim-ready** — lazy-loaded, which-key descriptions + group, works with any picker via `vim.ui.select`
 
 ## Requirements
@@ -74,6 +80,8 @@ REST Client style, many requests per file:
 - `Header: value` lines until the first blank line
 - After the blank line, everything until the next `###` is the request body
 - `#` lines are comments; `# @name foo` names the request (REST Client syntax)
+- Per-request directives: `# @timeout 5` (overrides `curl.timeout`), `# @no-redirect`
+  (skip `-L`), `# @no-log` (don't record this request in history)
 - `@name = value` lines define request-scoped variables (usable as `{{name}}`)
 
 ```http
@@ -170,7 +178,11 @@ what's missing.
 | `{{$uuid}}` | Random v4 UUID (lowercase) |
 | `{{$guid}}` | Random v4 UUID (uppercase) |
 | `{{$randomInt}}` | Random integer 0–10⁶ |
+| `{{$isoTimestamp}}` | RFC3339 UTC timestamp (`2024-01-01T00:00:00Z`) |
+| `{{$randomAlphaNumeric}}` | 16 random alphanumeric characters |
+| `{{$randomEmail}}` | Random `…@example.com` address |
 | `{{$status}}` | Status code of the last response |
+| `{{$body}}` | Raw (unparsed) last response body |
 | `{{$body.a.b.0.c}}` | Dotted path into the last response's JSON body (array indexes are 0-based, like Insomnia) |
 
 ```http
@@ -213,6 +225,37 @@ Authorization: Bearer {{$body.token}}
 | `:TuiterHistory` | Pick a past request and re-run it |
 | `:TuiterEnv` | Select environment |
 | `:TuiterResponse` | Toggle response window |
+| `:TuiterCopyAs [curl\|python\|js\|go]` | Copy the request under the cursor as a code snippet (no arg = picker) |
+
+## GraphQL support
+
+`.graphql` / `.gql` files get the same tuiter keymaps (send under cursor,
+sidebar, run all, completion). The endpoint comes from a `# @url` directive;
+every `query` / `mutation` / `subscription` operation becomes a POST with a
+JSON body `{"query": "<operation>", "variables": <# @variables or null>}`.
+`# @variables` attaches to the next operation and supports `{{var}}`:
+
+```graphql
+# @url http://localhost:4000/graphql
+# @variables {"userId": "{{$body.user.id}}"}
+
+query GetUser($id: ID!) {
+  user(id: $id) { name }
+}
+```
+
+## Form bodies & cookies
+
+- `Content-Type: multipart/form-data` + a body of `key=value` lines → sent
+  as `curl -F` fields (file uploads work too: `key=@path/to/file`). Raw
+  boundary syntax (`--boundary` lines) is sent as-is.
+- `Content-Type: application/x-www-form-urlencoded` + a body of `key=value`
+  lines (no `&`) → sent as `curl --data-urlencode` fields, so values are
+  encoded for you. Anything else goes through as a raw body.
+- Cookies: `curl.cookie_jar = true` (default) keeps a per-project cookie jar
+  under `stdpath("data")/tuiter/cookies/`, so a login request's `Set-Cookie`
+  is sent on follow-up requests automatically. Disable with
+  `curl = { cookie_jar = false }`.
 
 ## Statusline integration
 
@@ -246,6 +289,8 @@ history.lua       append to stdpath("data")/tuiter/history.json
 ```
 
 - Requests go out via `curl` over `vim.system` — never blocks the editor
+  (`--compressed` handles gzip/deflate/br transparently; responses are parsed
+  per-request with a 9-field `-w` timing marker)
 - The parser is pure Lua (no `vim.*`), so it runs in plain headless tests
 - Everything is lazy-loaded: the module chain only loads when you use a
   `Tuiter*` command or open a `.http` file
@@ -262,6 +307,7 @@ require("tuiter").history()              -- pick from history & re-run
 require("tuiter").select_env({ cwd })    -- choose environment
 require("tuiter").toggle_response()      -- show/hide response window
 require("tuiter").close_response()
+require("tuiter").copy_as("python")       -- copy snippet for the request under cursor
 require("tuiter").statusline()           -- "env: dev · HTTP 200" for lualine
 ```
 
@@ -292,7 +338,7 @@ switch with `:TuiterEnv` or `<leader>ie`.
       cancel = "<leader>ic", help = "<leader>ik",
       history = "<leader>ih", env = "<leader>ie", response = "<leader>ir",
     },
-    curl = { timeout = 30, insecure = false, max_redirects = 8 },
+    curl = { timeout = 30, insecure = false, max_redirects = 8, cookie_jar = true, compressed = true },
     env_files = { "http-client.env.json", "tuiter.env.json" },
     default_env = "default",
   },
@@ -305,18 +351,23 @@ want: `opts = { keymaps = { run = "<leader>xr", list = "<leader>xl", cancel = fa
 ## Development
 
 ```sh
-make test   # headless unit tests + integration test against a local server
+make test   # headless unit + integration + e2e tests (local server on :8999)
+make smoke  # real-config LazyVim smoke test (needs your ~/.config/nvim)
 make format # stylua
+make lint   # stylua --check
 ```
 
 Structure:
 
 ```
 plugin/tuiter.lua      commands + filetype detection
-ftplugin/http.lua      buffer keymaps + commentstring + omnifunc
+ftplugin/http.lua      buffer keymaps + commentstring + omnifunc + diagnostics
+ftplugin/graphql.lua   same for .graphql buffers
 lua/tuiter/init.lua    public API, config, run-all runner
-lua/tuiter/parser.lua  .http parsing (pure Lua)
+lua/tuiter/parser.lua  .http parsing + validation (pure Lua)
+lua/tuiter/graphql.lua .graphql parsing (pure Lua)
 lua/tuiter/client.lua  env/var resolution, dynamic values, curl, response parsing, JSON pretty
+lua/tuiter/codegen.lua curl/python/js/go snippet generation
 lua/tuiter/ui.lua      response windows + request sidebar + run summary
 lua/tuiter/history.lua persisted request history
 ```
@@ -328,4 +379,6 @@ lua/tuiter/history.lua persisted request history
   `<leader>1-9`), the test group (`<leader>t*`), or the http-client plugins
   (`<leader>ht`). Change them via `opts.keymaps`.
 - History lives in `stdpath("data")/tuiter/history.json`; favorites in
-  `stdpath("data")/tuiter/favorites.json`.
+  `stdpath("data")/tuiter/favorites.json`; cookies per project in
+  `stdpath("data")/tuiter/cookies/`.
+- CI runs `make test` + stylua on every push (`.github/workflows/ci.yml`).

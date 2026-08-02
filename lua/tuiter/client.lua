@@ -13,6 +13,22 @@ local seq = 0
 
 math.randomseed(os.time())
 
+local cookie_dir = vim.fn.stdpath("data") .. "/tuiter/cookies"
+pcall(vim.fn.mkdir, cookie_dir, "p")
+
+--- Per-project cookie jar (Insomnia-style session persistence).
+-- Pure-Lua FNV-1a hash of the cwd: vim.fn.sha256 is illegal inside
+-- vim.system callbacks (fast-event context), and the cookies dir is
+-- created once at module load for the same reason.
+local function jar_path(cwd)
+	local h = 2166136261
+	for i = 1, #cwd do
+		h = bit.bxor(h, cwd:byte(i))
+		h = bit.band(h * 16777619, 0xFFFFFFFF)
+	end
+	return cookie_dir .. "/" .. string.format("%08x", h) .. ".txt"
+end
+
 --- Walk up from `dir` looking for the first existing env file.
 local function env_file_for(dir, opts)
 	local d = dir
@@ -77,13 +93,17 @@ function M.ensure_env(dir, opts)
 end
 
 --- Dynamic values (Insomnia-style):
----   {{$timestamp}}  unix seconds    {{$uuid}}  random v4 uuid
----   {{$guid}}       uppercase uuid  {{$randomInt}} 0..10^6
----   {{$status}}     last response status code
+---   {{$timestamp}}  unix seconds     {{$isoTimestamp}}  RFC3339 UTC
+---   {{$uuid}}       random v4 uuid   {{$guid}}  uppercase uuid
+---   {{$randomInt}} 0..10^6           {{$randomAlphaNumeric}} 16 chars
+---   {{$randomEmail}}  random email   {{$status}}  last response status
+---   {{$body}}  raw last response body
 ---   {{$body.a.b.0.c}}  value from the last response JSON body (dotted path)
 local function dynamic(name)
 	if name == "$timestamp" then
 		return tostring(os.time())
+	elseif name == "$isoTimestamp" then
+		return os.date("!%Y-%m-%dT%H:%M:%SZ")
 	elseif name == "$uuid" then
 		local b = {}
 		for i = 1, 16 do
@@ -97,9 +117,28 @@ local function dynamic(name)
 		return dynamic("$uuid"):upper()
 	elseif name == "$randomInt" then
 		return tostring(math.random(0, 1000000))
+	elseif name == "$randomAlphaNumeric" then
+		local chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+		local t = {}
+		for i = 1, 16 do
+			local r = math.random(1, #chars)
+			t[i] = chars:sub(r, r)
+		end
+		return table.concat(t)
+	elseif name == "$randomEmail" then
+		local chars = "abcdefghijklmnopqrstuvwxyz"
+		local t = {}
+		for i = 1, 8 do
+			local r = math.random(1, #chars)
+			t[i] = chars:sub(r, r)
+		end
+		return table.concat(t) .. math.random(100, 999) .. "@example.com"
 	elseif name == "$status" then
 		local r = M.state.response
 		return r and tostring(r.status) or "{{$status}}"
+	elseif name == "$body" then
+		local r = M.state.response
+		return r and r.body or "{{$body}}"
 	elseif name:sub(1, 6) == "$body." then
 		local r = M.state.response
 		if not r then
@@ -133,7 +172,19 @@ function M.record_response(resp)
 	M.state.response = resp
 end
 
-local DYNAMIC_HINTS = { "$timestamp", "$uuid", "$guid", "$randomInt", "$status", "$body.token", "$body.data.id" }
+local DYNAMIC_HINTS = {
+	"$timestamp",
+	"$isoTimestamp",
+	"$uuid",
+	"$guid",
+	"$randomInt",
+	"$randomAlphaNumeric",
+	"$randomEmail",
+	"$status",
+	"$body",
+	"$body.token",
+	"$body.data.id",
+}
 
 --- Omnifunc for {{var}} placeholders in .http buffers (insert-mode <C-x><C-o>).
 --- Candidates: request vars > current env vars > dynamic values.
@@ -251,24 +302,77 @@ end
 
 --- Build the curl argv for a spec. When `marker` is given, a write-out
 --- stats line is appended (used by send; nil for the human "copy as curl").
+--- Body modes by Content-Type:
+---   multipart/form-data (k=v lines, no explicit boundary)  -> -F fields
+---   application/x-www-form-urlencoded (k=v lines, no "&")   -> --data-urlencode
+---   anything else                                          -> --data-binary @-
 function M.curl_args(spec, curl_opts, marker)
-	local args = { "curl", "-sS", "-i", "-X", spec.method, "--max-time", tostring(curl_opts.timeout or 30) }
+	curl_opts = curl_opts or {}
+	local timeout = tonumber((spec.opts or {}).timeout) or curl_opts.timeout or 30
+	local args = { "curl", "-sS", "-i", "-X", spec.method, "--max-time", tostring(timeout) }
 	if curl_opts.insecure then
 		vim.list_extend(args, { "-k" })
 	end
-	if curl_opts.max_redirects and curl_opts.max_redirects > 0 then
+	local follow = not (spec.opts and spec.opts.no_redirect)
+	if follow and curl_opts.max_redirects and curl_opts.max_redirects > 0 then
 		vim.list_extend(args, { "-L", "--max-redirs", tostring(curl_opts.max_redirects) })
 	end
+	if curl_opts.compressed ~= false then
+		vim.list_extend(args, { "--compressed" })
+	end
+	if curl_opts.cookie_jar ~= false and spec.cwd then
+		local jar = jar_path(spec.cwd)
+		vim.list_extend(args, { "-c", jar, "-b", jar })
+	end
+
+	local body = spec.body and M.substitute(spec.body, spec.vars) or nil
+	local mode = "raw"
+	if body and body ~= "" then
+		local ct = ""
+		for k, v in pairs(spec.headers or {}) do
+			if k:lower() == "content-type" then
+				ct = (v or ""):lower()
+			end
+		end
+		if ct:match("multipart/form%-data") and not body:match("^%s*%-%-") then
+			mode = "multipart"
+		elseif ct:match("application/x%-www%-form%-urlencoded") and not body:match("&") and body:match("=") then
+			mode = "urlencoded"
+		end
+	end
+
 	local headers = {}
 	for k, v in pairs(spec.headers or {}) do
-		headers[#headers + 1] = k .. ": " .. M.substitute(v, spec.vars)
+		-- curl builds its own Content-Type (with boundary) for -F fields
+		if not (mode == "multipart" and k:lower() == "content-type") then
+			headers[#headers + 1] = k .. ": " .. M.substitute(v, spec.vars)
+		end
 	end
 	table.sort(headers)
 	for _, h in ipairs(headers) do
 		vim.list_extend(args, { "-H", h })
 	end
-	if spec.body and spec.body ~= "" then
-		vim.list_extend(args, { "--data-binary", "@-" })
+
+	if body and body ~= "" then
+		local fields = {}
+		if mode == "multipart" or mode == "urlencoded" then
+			for line in body:gmatch("[^\r\n]+") do
+				if line:match("=") then
+					fields[#fields + 1] = line
+				end
+			end
+		end
+		if mode == "multipart" and #fields > 0 then
+			for _, f in ipairs(fields) do
+				vim.list_extend(args, { "-F", f })
+			end
+		elseif mode == "urlencoded" and #fields > 0 then
+			for _, f in ipairs(fields) do
+				vim.list_extend(args, { "--data-urlencode", f })
+			end
+		else
+			vim.list_extend(args, { "--data-binary", "@-" })
+		end
 	end
 	if marker then
 		vim.list_extend(args, {

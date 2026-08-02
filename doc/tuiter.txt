@@ -38,8 +38,8 @@ Install with lazy.nvim / LazyVim: >
   {
     dir = "~/path/to/tuiter",
     cmd = { "Tuiter", "TuiterRun", "TuiterRunAll", "TuiterSaveBody",
-            "TuiterHistory", "TuiterEnv", "TuiterResponse" },
-    ft = "http",
+            "TuiterHistory", "TuiterEnv", "TuiterResponse", "TuiterCopyAs" },
+    ft = { "http", "graphql" },
     opts = {},
   }
 <
@@ -192,6 +192,41 @@ records each response, so later requests can chain off earlier ones.
   :TuiterHistory         Pick a past request and re-run it
   :TuiterEnv             Select environment
   :TuiterResponse        Toggle response window
+  :TuiterCopyAs [lang]   Copy snippet for the request under the cursor
+                         (curl|python|js|go; no arg = picker)
+
+==============================================================================
+10a. GRAPHQL FILES                                     *tuiter-graphql*
+
+`.graphql`/`.gql` buffers get the same keymaps. The endpoint comes from a
+`# @url` directive; each query/mutation/subscription operation becomes a POST
+with JSON body `{"query": ..., "variables": <# @variables or null>}`.
+`# @variables` applies to the next operation and supports `{{var}}`:
+>
+  # @url http://localhost:4000/graphql
+  # @variables {"userId": "{{$body.user.id}}"}
+
+  query GetUser($id: ID!) {
+    user(id: $id) { name }
+  }
+<
+==============================================================================
+10b. FORM BODIES & COOKIES                             *tuiter-forms*
+
+- `multipart/form-data` + body of `key=value` lines -> curl `-F` fields
+  (file uploads: `key=@path`). Raw `--boundary` bodies are sent as-is.
+- `application/x-www-form-urlencoded` + body of `key=value` lines (no `&`)
+  -> curl `--data-urlencode` fields (values encoded for you).
+- `curl.cookie_jar = true` (default) keeps a per-project jar under
+  `stdpath("data")/tuiter/cookies/`, so login cookies persist across
+  requests. Disable with `curl = { cookie_jar = false }`.
+
+==============================================================================
+10c. DIAGNOSTICS                                     *tuiter-diagnostics*
+
+While editing a `.http` file, tuiter validates the buffer and shows
+LSP-style warnings: a bare method without URL, URLs without http(s)://,
+header/body mistakes. Refreshes on write and on edit.
 
 ==============================================================================
 11. STATUSLINE INTEGRATION                        *tuiter-statusline*
@@ -213,7 +248,8 @@ current environment and last response. With lualine: >
         cancel = "<leader>ic", help = "<leader>ik",
         history = "<leader>ih", env = "<leader>ie", response = "<leader>ir",
       },
-      curl = { timeout = 30, insecure = false, max_redirects = 8 },
+      curl = { timeout = 30, insecure = false, max_redirects = 8,
+             cookie_jar = true, compressed = true },
       env_files = { "http-client.env.json", "tuiter.env.json" },
       default_env = "default",
     },

@@ -58,11 +58,11 @@ local HELP_SECTIONS = {
 	},
 	{
 		"response",
-		"q close  1/2/3 or t tabs (body/headers/timeline)  p pretty/raw  y copy  c copy-curl  f save  z zoom  r resend  ? help",
+		"q close  1/2/3 or t tabs (body/headers/timeline)  p pretty/raw  y copy  c copy-curl  C copy-snippet  f save  z zoom  r resend  ? help",
 	},
 	{
 		"buffer",
-		"<leader>is send  <leader>il sidebar  <leader>ia run all  <leader>ic cancel  <leader>ik help  ]r/[r next/prev  <leader>ih history  <leader>ie env  <leader>ir response",
+		"<leader>is send  <leader>il sidebar  <leader>ia run all  <leader>ic cancel  <leader>ik help  ]r/[r next/prev  <leader>ih history  <leader>ie env  <leader>ir response  :TuiterCopyAs lang",
 	},
 }
 
@@ -413,6 +413,11 @@ function M.show(resp, spec, opts)
 			opts.copy_curl()
 		end
 	end, "Copy as curl")
+	buf_map(body_buf, "C", function()
+		if opts.copy_code then
+			opts.copy_code()
+		end
+	end, "Copy as code snippet (python/js/go)")
 	buf_map(body_buf, "r", function()
 		if opts.resend then
 			opts.resend()

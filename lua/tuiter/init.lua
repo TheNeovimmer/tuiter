@@ -5,8 +5,11 @@ local parser = require("tuiter.parser")
 local client = require("tuiter.client")
 local ui = require("tuiter.ui")
 local history = require("tuiter.history")
+local codegen = require("tuiter.codegen")
 
 local M = {}
+
+local LANG_NAMES = { "curl", "python", "js", "go" }
 
 local config = {
 	keymaps = {
@@ -19,7 +22,7 @@ local config = {
 		env = "<leader>ie",
 		response = "<leader>ir", -- toggle response window
 	},
-	curl = { timeout = 30, insecure = false, max_redirects = 8 },
+	curl = { timeout = 30, insecure = false, max_redirects = 8, cookie_jar = true, compressed = true },
 	env_files = { "http-client.env.json", "tuiter.env.json" },
 	default_env = "default",
 }
@@ -36,6 +39,27 @@ function M.setup(opts)
 	end)
 end
 
+--- Parse a buffer with the right parser for its filetype.
+local function parse_buffer(buf)
+	local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+	if vim.bo[buf].filetype == "graphql" then
+		return require("tuiter.graphql").parse(lines)
+	end
+	return parser.parse_lines(lines)
+end
+
+--- The request under the cursor of buffer opts.buf (or the current one).
+---@return integer buf, table? spec
+local function request_under_cursor(opts)
+	opts = opts or {}
+	local buf = opts.buf or 0
+	if buf == 0 then
+		buf = vim.api.nvim_get_current_buf()
+	end
+	local lnum = opts.lnum or vim.api.nvim_win_get_cursor(0)[1]
+	return buf, parser.at(parse_buffer(buf), lnum)
+end
+
 local function copy_curl(spec)
 	vim.fn.setreg('"', client.curl_command(spec, config.curl))
 	vim.notify("Tuiter: curl command copied", vim.log.levels.INFO, { title = "Tuiter" })
@@ -46,6 +70,10 @@ end
 ---@param spec table {method, url, headers?, body?, vars?, name?, cwd?}
 function M.resend(spec)
 	local cwd = spec.cwd or vim.fn.getcwd()
+	if not spec.url then
+		vim.notify("Tuiter: request has no URL (add a # @url directive)", vim.log.levels.WARN, { title = "Tuiter" })
+		return
+	end
 	client.ensure_env(cwd, config)
 	spec.env = client.state.env
 	vim.notify(string.format("Tuiter: %s %s", spec.method, spec.url), vim.log.levels.INFO, { title = "Tuiter" })
@@ -59,8 +87,13 @@ function M.resend(spec)
 				copy_curl = function()
 					copy_curl(spec)
 				end,
+				copy_code = function()
+					M.copy_code_for(spec)
+				end,
 			})
-			history.add(spec, resp)
+			if not (spec.no_log or (spec.opts and spec.opts.no_log)) then
+				history.add(spec, resp)
+			end
 		end)
 	end)
 end
@@ -69,13 +102,7 @@ end
 ---@param opts? {buf?: integer, lnum?: integer}
 function M.run(opts)
 	opts = opts or {}
-	local buf = opts.buf or 0
-	if buf == 0 then
-		buf = vim.api.nvim_get_current_buf()
-	end
-	local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-	local lnum = opts.lnum or vim.api.nvim_win_get_cursor(0)[1]
-	local spec = parser.at(parser.parse_lines(lines), lnum)
+	local buf, spec = request_under_cursor(opts)
 	if not spec then
 		vim.notify("Tuiter: no request found under cursor", vim.log.levels.WARN, { title = "Tuiter" })
 		return
@@ -94,7 +121,7 @@ function M.run_all(opts)
 	if buf == 0 then
 		buf = vim.api.nvim_get_current_buf()
 	end
-	local requests = parser.parse_lines(vim.api.nvim_buf_get_lines(buf, 0, -1, false))
+	local requests = parse_buffer(buf)
 	if #requests == 0 then
 		vim.notify("Tuiter: no requests in this buffer", vim.log.levels.WARN, { title = "Tuiter" })
 		return
@@ -132,7 +159,7 @@ end
 ---@param dir integer 1 = next, -1 = previous
 function M.jump_request(dir)
 	local buf = 0
-	local requests = parser.parse_lines(vim.api.nvim_buf_get_lines(buf, 0, -1, false))
+	local requests = parse_buffer(buf)
 	if #requests == 0 then
 		return
 	end
@@ -163,7 +190,7 @@ function M.sidebar()
 		-- inside a scratch/response buffer: reuse the last http buffer
 		buf = (M.source_buf and vim.api.nvim_buf_is_valid(M.source_buf) and M.source_buf) or 0
 	end
-	local requests = parser.parse_lines(vim.api.nvim_buf_get_lines(buf, 0, -1, false))
+	local requests = parse_buffer(buf)
 	if #requests == 0 then
 		vim.notify("Tuiter: no requests in this buffer", vim.log.levels.WARN, { title = "Tuiter" })
 		return
@@ -236,6 +263,33 @@ end
 
 function M.toggle_response()
 	ui.toggle()
+end
+
+--- Pick a language and copy the code snippet for `spec` (Insomnia-style).
+function M.copy_code_for(spec)
+	vim.ui.select(LANG_NAMES, { prompt = "Tuiter: copy as…" }, function(lang)
+		if lang then
+			vim.fn.setreg('"', codegen.generate(lang, spec, config.curl))
+			vim.notify("Tuiter: " .. lang .. " snippet copied", vim.log.levels.INFO, { title = "Tuiter" })
+		end
+	end)
+end
+
+--- :TuiterCopyAs {curl|python|js|go} — copy a snippet for the request under
+--- the cursor. Without an argument, opens a picker.
+---@param lang? string
+function M.copy_as(lang)
+	local _, spec = request_under_cursor()
+	if not spec then
+		vim.notify("Tuiter: no request under cursor", vim.log.levels.WARN, { title = "Tuiter" })
+		return
+	end
+	if lang and vim.tbl_contains(LANG_NAMES, lang) then
+		vim.fn.setreg('"', codegen.generate(lang, spec, config.curl))
+		vim.notify("Tuiter: " .. lang .. " snippet copied", vim.log.levels.INFO, { title = "Tuiter" })
+	else
+		M.copy_code_for(spec)
+	end
 end
 
 function M.close_response()

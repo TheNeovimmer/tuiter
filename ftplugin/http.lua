@@ -29,3 +29,29 @@ vim.api.nvim_create_autocmd("BufWinEnter", {
 	callback = setup_composer_highlights,
 })
 setup_composer_highlights()
+
+-- Lightweight diagnostics: catches malformed requests (missing URL, bad
+-- scheme, header/body mistakes) while you edit, via nvim's LSP-style UI.
+local diag_ns = vim.api.nvim_create_namespace("tuiter")
+
+local function refresh_diagnostics()
+	local issues = require("tuiter.parser").validate(vim.api.nvim_buf_get_lines(0, 0, -1, false))
+	local diags = {}
+	for _, iss in ipairs(issues) do
+		diags[#diags + 1] = {
+			lnum = iss.lnum - 1,
+			col = 0,
+			end_lnum = iss.lnum - 1,
+			end_col = 0,
+			severity = vim.diagnostic.severity.WARN,
+			message = iss.msg,
+			source = "tuiter",
+		}
+	end
+	vim.diagnostic.set(diag_ns, 0, diags)
+end
+
+vim.api.nvim_create_autocmd({ "BufWritePost", "BufReadPost", "InsertLeave", "TextChanged" }, {
+	buffer = 0,
+	callback = refresh_diagnostics,
+})

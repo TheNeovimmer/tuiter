@@ -1,0 +1,27 @@
+# GraphQL demo — run with tuiter against the local test server:
+#   python3 tests/server.py
+# Each operation becomes a POST request to `# @url` with a JSON body of
+# { "query": ..., "variables": ... }. `# @variables` attaches to the NEXT
+# operation and supports {{var}} substitution.
+
+# @url http://127.0.0.1:8999/graphql
+
+query GetEcho {
+  echo(message: "hello") {
+    message
+  }
+}
+
+mutation CreateUser {
+  createUser(name: "ada") {
+    id
+    name
+  }
+}
+
+# @variables {"query": "{{$randomInt}}"}
+query WithVariables {
+  search(query: "{{$randomAlphaNumeric}}") {
+    id
+  }
+}

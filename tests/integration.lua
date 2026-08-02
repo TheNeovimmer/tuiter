@@ -57,6 +57,62 @@ local p = results.post
 assert(p.status == 201, "POST status: " .. vim.inspect(p))
 assert(vim.json.decode(p.body).echo == '{"hello":"world"}', "POST echo: " .. vim.inspect(p.body))
 
+-- cookie jar: /cookie sets a cookie; a later request on the same cwd
+-- sends it back (server echoes the Cookie header)
+local cdone, cj = false, nil
+client.send(
+	{ method = "GET", url = "http://127.0.0.1:8999/cookie", headers = {}, body = nil, vars = {}, cwd = "." },
+	{ timeout = 10 },
+	".",
+	function(r)
+		assert(r.status == 200, "cookie endpoint status")
+		client.send(
+			{ method = "GET", url = "http://127.0.0.1:8999/api?jar=1", headers = {}, body = nil, vars = {}, cwd = "." },
+			{ timeout = 10 },
+			".",
+			function(r2)
+				cj = vim.json.decode(r2.body).cookie
+				cdone = true
+			end
+		)
+	end
+)
+assert(
+	vim.wait(5000, function()
+		return cdone
+	end),
+	"cookie jar requests timed out"
+)
+eq(cj, "tuiter_test=1", "cookie persisted across requests")
+
+-- multipart: -F fields reach the server raw
+local mdone, mres = false, nil
+client.send(
+	{
+		method = "POST",
+		url = "http://127.0.0.1:8999/users",
+		headers = { ["Content-Type"] = "multipart/form-data" },
+		body = "name=ada\nrole=admin",
+		vars = {},
+		cwd = ".",
+	},
+	{ timeout = 10 },
+	".",
+	function(r)
+		mres = r.body
+		mdone = true
+	end
+)
+assert(
+	vim.wait(5000, function()
+		return mdone
+	end),
+	"multipart request timed out"
+)
+local mecho = vim.json.decode(mres).echo
+assert(mecho:match('name="name"') and mecho:match("ada"), "multipart field name=ada: " .. mecho)
+assert(mecho:match('name="role"') and mecho:match("admin"), "multipart field role=admin")
+
 -- response UI opens/closes headlessly
 ui.show(g, spec, {})
 assert(ui.state.body_win and vim.api.nvim_win_is_valid(ui.state.body_win), "body window missing")

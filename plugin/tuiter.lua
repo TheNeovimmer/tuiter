@@ -1,7 +1,7 @@
 -- tuiter plugin entry: commands + filetype detection.
 require("tuiter").setup()
 
-vim.filetype.add({ extension = { http = "http" } })
+vim.filetype.add({ extension = { http = "http", graphql = "graphql", gql = "graphql" } })
 
 vim.api.nvim_create_user_command("Tuiter", function()
 	require("tuiter").sidebar()
@@ -19,6 +19,16 @@ end, { desc = "Run every request in the buffer and show a summary" })
 vim.api.nvim_create_user_command("TuiterCancel", function()
 	require("tuiter").cancel()
 end, { desc = "Cancel in-flight requests" })
+
+vim.api.nvim_create_user_command("TuiterCopyAs", function(a)
+	require("tuiter").copy_as(a.args ~= "" and a.args or nil)
+end, {
+	nargs = "?",
+	complete = function()
+		return { "curl", "python", "js", "go" }
+	end,
+	desc = "Copy the request under the cursor as a code snippet (curl/python/js/go)",
+})
 
 vim.api.nvim_create_user_command("TuiterSaveBody", function()
 	require("tuiter.ui").save_body()
