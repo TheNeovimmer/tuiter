@@ -1,202 +1,227 @@
-*tuiter.txt*        Interactive API explorer for Neovim
+*tuiter.txt*               Interactive API explorer for Neovim
 
 ==============================================================================
-CONTENTS                                        *tuiter-contents*
+CONTENTS                                                *tuiter-contents*
 
-  1. Introduction ............ |tuiter-intro|
-  2. Installation ............ |tuiter-install|
-  3. Quick start ............. |tuiter-quickstart|
-  4. Request files ........... |tuiter-format|
-  5. Variables & environments |tuiter-env|
-  6. Commands ................ |tuiter-commands|
-  7. Keymaps ................. |tuiter-keymaps|
-  8. Configuration ........... |tuiter-config|
-  9. API ..................... |tuiter-api|
-
-==============================================================================
-INTRODUCTION                                    *tuiter-intro*
-
-tuiter is an interactive API explorer for Neovim. Write HTTP requests in
-.http files (REST Client format), send them with one key, and inspect the
-response in a floating window. Built-in request history and environment
-variables make it a lightweight Postman/Insomnia replacement that stays in
-your editor.
-
-Features:
-
-- Parse `.http` request files (methods, headers, bodies, `###` sections)
-- Postman-style request sidebar listing every request in the file
-- Async requests via `curl` (no external dependencies beyond curl)
-- Response window with status, headers, and JSON-pretty-printed body
-- Pretty/raw JSON toggle, copy body, copy-as-curl
-- JSON bodies highlighted with treesitter
-- Request history with replay (`vim.ui.select` powered picker)
-- Environment variables from `http-client.env.json` / `tuiter.env.json`
-- Request-scoped `@var` definitions
+1. Introduction............................|tuiter-introduction|
+2. Requirements............................|tuiter-requirements|
+3. Usage...................................|tuiter-usage|
+4. Request file format....................|tuiter-request-format|
+5. Keymaps................................. |tuiter-keymaps|
+6. Request sidebar.........................|tuiter-sidebar|
+7. Collection runner.......................|tuiter-run-all|
+8. Response window.........................|tuiter-response|
+9. Dynamic variables.......................|tuiter-dynamic|
+10. Commands..............................|tuiter-commands|
+11. Statusline integration.................|tuiter-statusline|
+12. Configuration..........................|tuiter-config|
+13. Public API.............................|tuiter-api|
+14. Development............................|tuiter-development|
 
 ==============================================================================
-INSTALLATION                                    *tuiter-install*
+1. INTRODUCTION                                      *tuiter-introduction*
 
-With lazy.nvim (LazyVim): ~
-
-    {
-      dir = "~/path/to/tuiter",          -- or a git remote
-      cmd = { "Tuiter", "TuiterRun", "TuiterHistory", "TuiterEnv" },
-      ft = "http",
-      opts = {},
-    }
-
-Requires Neovim >= 0.10 and curl.
+tuiter is a Postman/Insomnia-style API explorer that lives in your editor.
+Write requests in `.http` files, send them with one key, read responses in
+floating windows — with a request sidebar, collection runner, history,
+environments, dynamic variables, and JSON pretty-printing. Pure Lua, no
+plugin dependencies (requests go out via `curl` over |vim.system()|).
 
 ==============================================================================
-QUICK START                                     *tuiter-quickstart*
+2. REQUIREMENTS                                      *tuiter-requirements*
 
-1. Open a `.http` file (filetype is detected automatically).
-2. Put the cursor on a request line: ~
+- Neovim >= 0.10 (uses vim.system, window titles, vim.json)
+- `curl` on PATH
 
-       ### Get users
-       GET https://api.example.com/users
-       Accept: application/json
+Install with lazy.nvim / LazyVim: >
+  {
+    dir = "~/path/to/tuiter",
+    cmd = { "Tuiter", "TuiterRun", "TuiterRunAll", "TuiterSaveBody",
+            "TuiterHistory", "TuiterEnv", "TuiterResponse" },
+    ft = "http",
+    opts = {},
+  }
+<
+==============================================================================
+3. USAGE                                                *tuiter-usage*
 
-3. Press `<leader>is` (or `:TuiterRun`) to send it.
-4. Read the response: headers on top, body below. `t` toggles the headers
-   window, `p` toggles pretty/raw JSON, `y` copies the body, `c` copies a
-   curl command, `r` resends, `q` closes.
-5. Press `<leader>il` (or `:Tuiter`) for a Postman-style sidebar listing
-   every request in the file: `<CR>` runs, `g` jumps to the source line.
+Open a `.http` file and press `<leader>il` for the request sidebar, or put
+the cursor on a request and hit `<leader>is`.
+
+See `examples/demo.http` for a runnable demo: most requests hit a public
+API; the local ones need `python3 tests/server.py` running.
 
 ==============================================================================
-REQUEST FILES                                   *tuiter-format*
+4. REQUEST FILE FORMAT                            *tuiter-request-format*
 
-Requests use the REST Client format. A file holds many requests separated
-by `###` (optionally followed by a name): ~
+REST Client style, many requests per file:
 
-    ### Get user
-    GET https://api.example.com/users/1
-    Authorization: Bearer {{token}}
+- `### Name` starts a new request (optional name); a bare `METHOD URL` line
+  also starts one without a name
+- First line: `METHOD URL` — GET is implied when the method is omitted
+- `Header: value` lines until the first blank line
+- After the blank line, everything until the next `###` is the body
+- `#` lines are comments; `# @name foo` names the request
+- `@name = value` lines define request-scoped variables (use as `{{name}}`)
 
-    ### Create user
-    POST https://api.example.com/users
-    Content-Type: application/json
+Example: >
+  ### Auth
+  # @name login
+  @token = abc123
+  POST https://api.example.com/login
+  Authorization: Bearer {{token}}
+  Content-Type: application/json
 
-    {
-      "name": "ada"
-    }
-
-- The first line of a request is `METHOD URL` (GET is assumed when omitted).
-- Header lines are `Name: value`.
-- After an empty line, everything until the next `###` is the request body.
-- Lines starting with `#` are comments.
-- `@name = value` lines define request-scoped variables.
-
-==============================================================================
-VARIABLES & ENVIRONMENTS                        *tuiter-env*
-
-`{{name}}` placeholders are replaced when a request is sent. Resolution
-order: request-scoped `@name` vars, the selected environment, then your
-shell environment (os env). Unresolved placeholders are left as-is.
-
-Environment files: `http-client.env.json` or `tuiter.env.json`, searched
-from the request file's directory upward. Format (http-client compatible):
-
-    {
-      "dev":  { "token": "dev-token" },
-      "prod": { "token": "prod-token" }
-    }
-
-- `:TuiterEnv` (or `<leader>he`) picks the active environment.
-- The `default` environment (or the first key) is auto-selected on the
-  first request in a project that has an env file.
+  {"user": "ada"}
+<
 
 ==============================================================================
-COMMANDS                                        *tuiter-commands*
+5. KEYMAPS                                            *tuiter-keymaps*
 
-                                                *:Tuiter*
-:Tuiter                 Toggle the request sidebar (list of requests in the
-                        current file).
+Buffer-local, in `.http` files, under the `<leader>i` group (free in
+LazyVim; shown as a "tuiter" which-key group):
 
-                                                *:TuiterRun*
-:TuiterRun [lnum]       Send the request under the cursor. An optional line
-                        number sends the request at that line.
+  <leader>is   Send request under cursor
+  <leader>il   Request sidebar
+  <leader>ia   Run all requests in the file (summary)
+  <leader>ih   Request history (pick & re-run)
+  <leader>ie   Select environment
+  <leader>ir   Toggle response window
+  ]r / [r      Next / previous request
 
-                                                *:TuiterHistory*
-:TuiterHistory          Pick a past request from history and re-run it.
-
-                                                *:TuiterEnv*
-:TuiterEnv              Select the active environment.
-
-                                                *:TuiterResponse*
-:TuiterResponse         Toggle the response window (re-shows last response).
+In insert mode, `<C-x><C-o>` completes `{{var}}` placeholders (request
+vars, env vars, dynamic values).
 
 ==============================================================================
-KEYMAPS                                         *tuiter-keymaps*
+6. REQUEST SIDEBAR                                  *tuiter-sidebar*
 
-Buffer-local to `.http` files (disable with `keymaps = false` in
-|tuiter-config|). The `<leader>i` group is unused by LazyVim and never
-clashes with harpoon (`<leader>h`/`<leader>H`) or the http-client plugins
-(`<leader>ht`):
+`<leader>il` or `:Tuiter` opens a Postman-style list of every request in
+the file: ★ favorites first, then color-coded methods (GET green, POST
+blue, PUT/PATCH yellow, DELETE red), name, URL, and the last response
+status as a `[200]`/`[404]` mark. A hint bar shows the keys.
 
-    <leader>is  Send request under cursor
-    <leader>il  Request sidebar
-    <leader>ih  Request history
-    <leader>ie  Select environment
-    <leader>ir  Toggle response window
-
-In the request sidebar:
-
-    <CR>  Run the request under the cursor
-    g     Jump to the request in the source file
-    q     Close
-
-In the response window:
-
-    q   Close response
-    t   Toggle headers window
-    p   Toggle pretty/raw JSON body
-    y   Copy body to the yank register
-    c   Copy as curl command
-    r   Resend the request
+  <CR>   Run request (sidebar closes)
+  g      Jump to the request in the file
+  *      Toggle favorite (persisted)
+  a      Run all requests
+  c      Copy as curl
+  ?      Keymap help
+  q      Close
 
 ==============================================================================
-CONFIGURATION                                   *tuiter-config*
+7. COLLECTION RUNNER                              *tuiter-run-all*
 
-    require("tuiter").setup({
-      keymaps = {
-        run = "<leader>is", list = "<leader>il", history = "<leader>ih",
-        env = "<leader>ie", response = "<leader>ir",
+`<leader>ia` or `:TuiterRunAll` runs every request in the buffer
+sequentially (150ms apart) and opens a summary float: ✓ green / ✗ red
+lines with method, name, status, time, size. `<CR>` on a line jumps to
+that request in the file. Run-all does not pollute history.
+
+==============================================================================
+8. RESPONSE WINDOW                                *tuiter-response*
+
+Headers on top, body below. JSON bodies are pretty-printed and
+treesitter-highlighted. A status bar shows `tuiter · METHOD URL · HTTP 200
+OK · 123ms · 1.2KB · env: dev` — green when ok, red on error/4xx-5xx.
+
+  q   Close response
+  t   Toggle headers window
+  p   Toggle pretty / raw JSON body
+  y   Copy body to the yank register
+  c   Copy as curl (shell-safe, Insomnia-style)
+  f   Save body to a file (:TuiterSaveBody)
+  z   Zoom: body fills the screen (headers hidden)
+  r   Resend the request
+  ?   Keymap help
+
+==============================================================================
+9. DYNAMIC VARIABLES                              *tuiter-dynamic*
+
+Placeholders `{{name}}` are resolved at send time in order: request vars →
+env vars → shell env → dynamic values. Unresolved names stay visible.
+
+  {{$timestamp}}      Unix seconds
+  {{$uuid}}           Random v4 UUID (lowercase)
+  {{$guid}}           Random v4 UUID (uppercase)
+  {{$randomInt}}      Random integer 0–10^6
+  {{$status}}         Status code of the last response
+  {{$body.a.b.0.c}}   Dotted path into the last response's JSON body
+                      (array indexes are 0-based, like Insomnia)
+
+Example — use a token from a login response: >
+  POST https://api.example.com/login
+  Content-Type: application/json
+
+  {"user": "ada"}
+
+  GET https://api.example.com/me
+  Authorization: Bearer {{$body.token}}
+<
+
+Responses from single runs feed `{{$body.*}}`; the collection runner also
+records each response, so later requests can chain off earlier ones.
+
+==============================================================================
+10. COMMANDS                                          *tuiter-commands*
+
+  :Tuiter                Toggle request sidebar
+  :TuiterRun [lnum]      Send request under cursor
+  :TuiterRunAll          Run all requests, show summary
+  :TuiterSaveBody        Save last response body to a file
+  :TuiterHistory         Pick a past request and re-run it
+  :TuiterEnv             Select environment
+  :TuiterResponse        Toggle response window
+
+==============================================================================
+11. STATUSLINE INTEGRATION                        *tuiter-statusline*
+
+`require("tuiter").statusline()` returns `env: dev · HTTP 200` for the
+current environment and last response. With lualine: >
+  { "tuiter.statusline", cond = function()
+      return require("tuiter").statusline() ~= ""
+    end }
+<
+
+==============================================================================
+12. CONFIGURATION                                    *tuiter-config*
+
+>  {
+    opts = {
+      keymaps = { -- or false to disable
+        run = "<leader>is", list = "<leader>il", run_all = "<leader>ia",
+        history = "<leader>ih", env = "<leader>ie", response = "<leader>ir",
       },
       curl = { timeout = 30, insecure = false, max_redirects = 8 },
       env_files = { "http-client.env.json", "tuiter.env.json" },
       default_env = "default",
-    })
-
-- `keymaps`: table of mappings, or `false` to register none.
-- `curl.timeout`: seconds before aborting a request.
-- `curl.insecure`: pass `-k` to curl (self-signed certs).
-- `curl.max_redirects`: follow redirects up to N hops (0 disables).
-- `env_files`: env file names to look for, in order.
-- `default_env`: env auto-selected on first use in a project.
-
-Highlights: ~
-
-    TuiterOk       status line tint for success (links DiagnosticOk)
-    TuiterError    status line tint for errors  (links DiagnosticError)
+    },
+  }
+<
 
 ==============================================================================
-API                                                 *tuiter-api*
+13. PUBLIC API                                        *tuiter-api*
 
-    require("tuiter").setup(opts)
-    require("tuiter").run({ buf = 0, lnum = nil })
-    require("tuiter").resend(spec)
-    require("tuiter").sidebar()
-    require("tuiter").history()
-    require("tuiter").select_env({ cwd = nil })
-    require("tuiter").toggle_response()
-    require("tuiter").close_response()
+>  require("tuiter").setup(opts)
+>  require("tuiter").run({ buf, lnum })
+>  require("tuiter").run_all({ buf })
+>  require("tuiter").resend(spec)
+>  require("tuiter").sidebar()
+>  require("tuiter").history()
+>  require("tuiter").select_env({ cwd })
+>  require("tuiter").toggle_response()
+>  require("tuiter").close_response()
+>  require("tuiter").statusline()
 
 ==============================================================================
-TESTING                                         *tuiter-testing*
+14. DEVELOPMENT                                    *tuiter-development*
 
-    make test   # unit + integration tests (headless nvim + local server)
+  make test    # headless unit tests + integration test against a local server
+  make format  # stylua
+
+- Requests go out via curl over vim.system — never blocks the editor
+- The parser is pure Lua (no vim.*), so it runs in plain headless tests
+- Everything is lazy-loaded: the module chain loads only when you use a
+  Tuiter* command or open a `.http` file
+- History: stdpath("data")/tuiter/history.json
+- Favorites: stdpath("data")/tuiter/favorites.json
 
 vim:tw=78:ts=8:noet:ft=help:norl:

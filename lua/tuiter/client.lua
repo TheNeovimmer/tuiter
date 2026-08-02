@@ -1,9 +1,16 @@
 --- HTTP client: env/var resolution + curl dispatch + response parsing.
 local M = {
-	state = { env = nil, env_file = nil, env_vars = {} },
+	state = {
+		env = nil,
+		env_file = nil,
+		env_vars = {},
+		response = nil, -- last response (for {{$body.*}} / {{$status}})
+	},
 }
 
 local seq = 0
+
+math.randomseed(os.time())
 
 --- Walk up from `dir` looking for the first existing env file.
 local function env_file_for(dir, opts)
@@ -68,14 +75,111 @@ function M.ensure_env(dir, opts)
 	M.set_env(name, dir, opts)
 end
 
---- Replace {{var}} placeholders: request vars > env vars > os env. Unresolved
---- names are left untouched so the user sees what's missing.
+--- Dynamic values (Insomnia-style):
+---   {{$timestamp}}  unix seconds    {{$uuid}}  random v4 uuid
+---   {{$guid}}       uppercase uuid  {{$randomInt}} 0..10^6
+---   {{$status}}     last response status code
+---   {{$body.a.b.0.c}}  value from the last response JSON body (dotted path)
+local function dynamic(name)
+	if name == "$timestamp" then
+		return tostring(os.time())
+	elseif name == "$uuid" then
+		local b = {}
+		for i = 1, 16 do
+			b[i] = math.random(0, 255)
+		end
+		b[7] = bit.bor(bit.band(b[7], 0x0f), 0x40)
+		b[9] = bit.bor(bit.band(b[9], 0x3f), 0x80)
+		local f = "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x"
+		return f:format(unpack(b))
+	elseif name == "$guid" then
+		return dynamic("$uuid"):upper()
+	elseif name == "$randomInt" then
+		return tostring(math.random(0, 1000000))
+	elseif name == "$status" then
+		local r = M.state.response
+		return r and tostring(r.status) or "{{$status}}"
+	elseif name:sub(1, 6) == "$body." then
+		local r = M.state.response
+		if not r then
+			return "{{" .. name .. "}}"
+		end
+		local ok, data = pcall(vim.json.decode, r.body)
+		if not ok then
+			return "{{" .. name .. "}}"
+		end
+		for part in name:sub(7):gmatch("[^%.]+") do
+			if type(data) ~= "table" then
+				return "{{" .. name .. "}}"
+			end
+			-- JSON array indexes are 0-based (Insomnia-style): .list.0 -> first item
+			local n = tonumber(part)
+			data = data[n and n + 1 or part]
+		end
+		if data == nil then
+			return "{{" .. name .. "}}"
+		end
+		if type(data) == "table" then
+			return vim.json.encode(data)
+		end
+		return tostring(data)
+	end
+	return nil
+end
+
+--- Record the last response so later requests can reference it.
+function M.record_response(resp)
+	M.state.response = resp
+end
+
+local DYNAMIC_HINTS = { "$timestamp", "$uuid", "$guid", "$randomInt", "$status", "$body.token", "$body.data.id" }
+
+--- Omnifunc for {{var}} placeholders in .http buffers (insert-mode <C-x><C-o>).
+--- Candidates: request vars > current env vars > dynamic values.
+function M.complete(findstart, base)
+	if findstart == 1 then
+		local line = vim.api.nvim_get_current_line()
+		local col = vim.api.nvim_win_get_cursor(0)[2]
+		local before = line:sub(1, col)
+		local s = before:match(".*{{([%w_$%.]*)$")
+		if s then
+			return col - #s
+		end
+		return -3
+	end
+	local items, seen = {}, {}
+	local function add(text, kind)
+		if not seen[text] then
+			seen[text] = true
+			items[#items + 1] = { word = "{{" .. text .. "}}", kind = kind, dup = 1 }
+		end
+	end
+	local ok, reqs = pcall(require("tuiter.parser").parse_lines, vim.api.nvim_buf_get_lines(0, 0, -1, false))
+	if ok then
+		for _, r in ipairs(reqs) do
+			for k in pairs(r.vars) do
+				add(k, "r")
+			end
+		end
+	end
+	for k in pairs(M.state.env_vars) do
+		add(k, "e")
+	end
+	for _, d in ipairs(DYNAMIC_HINTS) do
+		add(d, "d")
+	end
+	return items
+end
+
+--- Replace {{var}} placeholders. Resolution order: request vars > env vars >
+--- os env > dynamic values ({{$...}}). Unresolved names are left untouched so
+--- the user sees what's missing.
 function M.substitute(str, request_vars)
 	if type(str) ~= "string" then
 		return str
 	end
 	return (
-		str:gsub("{{([%w_]+)}}", function(name)
+		str:gsub("{{([%w_$%.]+)}}", function(name)
 			if request_vars and request_vars[name] ~= nil then
 				return tostring(request_vars[name])
 			end
@@ -86,6 +190,10 @@ function M.substitute(str, request_vars)
 			local o = vim.env[name]
 			if o ~= nil then
 				return o
+			end
+			local d = name:sub(1, 1) == "$" and dynamic(name) or nil
+			if d ~= nil then
+				return d
 			end
 			return "{{" .. name .. "}}"
 		end)

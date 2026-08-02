@@ -36,4 +36,23 @@ DELETE https://jsonplaceholder.typicode.com/posts/1
 GET https://jsonplaceholder.typicode.com/health
 
 ### Local test server — start it with: python3 tests/server.py
+# @name local-ping
 GET http://127.0.0.1:8999/api?x=1
+
+### Response chaining — uses {{$body.*}} from the LAST response above.
+# {{$body.method}} becomes "GET", {{$body.path}} becomes "/api?x=1",
+# and {{$status}} is the last response code. Also try {{$timestamp}}.
+# @name chain
+GET http://127.0.0.1:8999/api?method={{$body.method}}&from={{$status}}
+
+### Dynamic values
+# @name dynamic
+POST http://127.0.0.1:8999/users
+Content-Type: application/json
+
+{
+  "id": {{$randomInt}},
+  "uuid": "{{$uuid}}",
+  "guid": "{{$guid}}",
+  "ts": {{$timestamp}}
+}

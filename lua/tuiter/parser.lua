@@ -35,7 +35,11 @@ function M.parse_lines(lines)
 		elseif line == "" then
 			in_body = true
 		elseif line:match("^#") then
-			-- comment, skip
+			-- comment, skip (except REST Client naming: `# @name foo`)
+			local n = line:match("^#%s*@name%s*[=:]?%s*(.-)%s*$")
+			if n then
+				cur.name = n
+			end
 		else
 			local k, v = line:match("^([%w%-_]+)%s*:%s*(.*)$")
 			if k then

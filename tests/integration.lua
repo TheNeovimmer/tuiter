@@ -1,8 +1,16 @@
 -- Integration test: real curl send against a local server + response UI.
 -- Run: nvim --headless -l tests/integration.lua
-package.path = "./lua/?.lua;" .. package.path
+package.path = "./lua/?.lua;./lua/?/init.lua;" .. package.path
 local client = require("tuiter.client")
 local ui = require("tuiter.ui")
+
+local failed = 0
+local function eq(got, want, label)
+	if got ~= want then
+		failed = failed + 1
+		print(("FAIL %s: got %q, want %q"):format(label, tostring(got), tostring(want)))
+	end
+end
 
 local server = vim.system({ "python3", "tests/server.py" }, {}, function() end)
 
@@ -56,6 +64,40 @@ assert(ui.state.head_win and vim.api.nvim_win_is_valid(ui.state.head_win), "head
 ui.close()
 assert(not (ui.state.body_win and vim.api.nvim_win_is_valid(ui.state.body_win)), "close failed")
 
+-- response chaining: last response feeds {{$body.*}} / {{$status}}
+client.record_response(g)
+eq(client.substitute("{{$body.method}}", {}), "GET", "chain method")
+eq(client.substitute("{{$body.path}}", {}), "/api?x=1", "chain path")
+eq(client.substitute("{{$status}}", {}), "200", "chain status")
+
+-- run all: summary window opens with results
+vim.api.nvim_buf_set_lines(0, 0, -1, false, {
+	"### Ping",
+	"GET http://127.0.0.1:8999/api",
+	"",
+	"### Post",
+	"POST http://127.0.0.1:8999/users",
+	"Content-Type: application/json",
+	"",
+	'{"x":1}',
+})
+local tuiter = require("tuiter")
+tuiter.run_all()
+local ran = vim.wait(8000, function()
+	return ui.state.summary_win and vim.api.nvim_win_is_valid(ui.state.summary_win)
+end)
+assert(ran, "run_all summary window")
+assert(ui.state.results["http://127.0.0.1:8999/api"] == 200, "run_all GET marked")
+assert(ui.state.results["http://127.0.0.1:8999/users"] == 201, "run_all POST marked")
+pcall(vim.api.nvim_win_close, ui.state.summary_win, true)
+ui.state.summary_win = nil
+
+-- favorites toggle + persistence roundtrip
+ui.toggle_fav("http://fav.test/x")
+assert(ui.state.favs["http://fav.test/x"] == true, "favorite set")
+ui.toggle_fav("http://fav.test/x")
+assert(ui.state.favs["http://fav.test/x"] == nil, "favorite unset")
+
 -- sidebar opens/closes
 local parser = require("tuiter.parser")
 ui.show_sidebar(parser.parse_lines({ "### Get", "GET http://127.0.0.1:8999/api", "" }), {
@@ -68,4 +110,9 @@ ui.close_sidebar()
 assert(not ui.sidebar_is_open(), "sidebar close")
 
 server:kill()
-print("ALL INTEGRATION TESTS PASSED")
+if failed == 0 then
+	print("ALL INTEGRATION TESTS PASSED")
+else
+	print(failed .. " FAILURES")
+	os.exit(1)
+end

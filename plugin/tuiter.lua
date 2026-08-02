@@ -12,6 +12,14 @@ vim.api.nvim_create_user_command("TuiterRun", function(a)
 	require("tuiter").run(lnum and { lnum = lnum } or {})
 end, { nargs = "?", desc = "Send the request under the cursor (TuiterRun [lnum])" })
 
+vim.api.nvim_create_user_command("TuiterRunAll", function()
+	require("tuiter").run_all()
+end, { desc = "Run every request in the buffer and show a summary" })
+
+vim.api.nvim_create_user_command("TuiterSaveBody", function()
+	require("tuiter.ui").save_body()
+end, { desc = "Save the last response body to a file" })
+
 vim.api.nvim_create_user_command("TuiterHistory", function()
 	require("tuiter").history()
 end, { desc = "Browse tuiter request history" })

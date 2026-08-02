@@ -61,7 +61,7 @@ local f = io.open("examples/demo.http", "r")
 if f then
 	local content = f:read("*a")
 	f:close()
-	eq(#parser.parse_lines(vim.split(content, "\n")), 7, "demo requests")
+	eq(#parser.parse_lines(vim.split(content, "\n")), 9, "demo requests")
 end
 
 -- --- substitution ---
@@ -112,6 +112,29 @@ client.state.env, client.state.env_file = nil, nil
 client.ensure_env(tmp, { env_files = { "tuiter.env.json" }, default_env = "prod" })
 eq(client.state.env, "prod", "default_env wins when present")
 
+-- --- dynamic variables ---
+eq(client.substitute("{{$timestamp}}", {}):match("^%d+$") ~= nil, true, "timestamp")
+eq(
+	client.substitute("{{$uuid}}", {}):match("^%x%x%x%x%x%x%x%x%-%x%x%x%x%-%x%x%x%x%-%x%x%x%x%-%x%x%x%x%x%x%x%x%x%x%x%x$")
+		~= nil,
+	true,
+	"uuid format"
+)
+local guid = client.substitute("{{$guid}}", {})
+eq(guid:match("^%x%x%x%x%x%x%x%x%-%x%x%x%x%-%x%x%x%x%-%x%x%x%x%-%x%x%x%x%x%x%x%x%x%x%x%x$") ~= nil, true, "guid format")
+eq(guid:match("%l") == nil, true, "guid uppercase")
+local ri = tonumber(client.substitute("{{$randomInt}}", {}))
+eq(ri ~= nil and ri >= 0 and ri <= 1000000, true, "randomInt range")
+
+-- --- response chaining ({{$body.*}}, {{$status}}) ---
+client.record_response({ body = '{"token":"abc","data":{"id":5},"list":[10,20]}', status = 200 })
+eq(client.substitute("{{$body.token}}", {}), "abc", "body scalar")
+eq(client.substitute("{{$body.data.id}}", {}), "5", "body nested")
+eq(client.substitute("{{$body.list.0}}", {}), "10", "body array 0-based")
+eq(client.substitute("{{$body.list.1}}", {}), "20", "body array index")
+eq(client.substitute("{{$body.missing}}", {}), "{{$body.missing}}", "body missing kept")
+eq(client.substitute("{{$status}}", {}), "200", "status")
+
 -- --- pretty json ---
 eq(client.pretty_json('{"a":1,"b":[1,2]}'), '{\n  "a": 1,\n  "b": [\n    1,\n    2\n  ]\n}', "pretty")
 eq(client.pretty_json("not json"), nil, "invalid json")
@@ -122,3 +145,28 @@ else
 	print(failed .. " FAILURES")
 	os.exit(1)
 end
+
+-- --- @name request naming (REST Client style) ---
+local named = parser.parse_lines({
+	"### A",
+	"GET https://x.test/1",
+	"# @name first",
+	"",
+	"### B",
+	"POST https://x.test/2",
+	"# @name=second",
+})
+eq(named[1].name, "first", "@name after request")
+eq(named[2].name, "second", "@name= syntax")
+eq(parser.parse_lines({ "GET https://x.test/", "# @name bare" })[1].name, "bare", "@name on implicit request")
+
+-- --- omni-completion ---
+client.set_env("dev", ".", { env_files = { "tests/fixtures/env.json" } })
+vim.api.nvim_buf_set_lines(0, 0, -1, false, { "### X", "GET https://x.test/{{tok", "" })
+vim.api.nvim_win_set_cursor(0, { 2, #"GET https://x.test/{{tok" })
+eq(client.complete(1, ""), #"GET https://x.test/{{", "findstart column after {{")
+local items = client.complete(0, "tok")
+local found = vim.tbl_filter(function(it)
+	return it.word == "{{token}}"
+end, items)
+eq(#found == 1, true, "completion includes env var")
