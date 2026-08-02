@@ -38,6 +38,8 @@ Insomnia/Postman for your editor, written in pure Lua.
 -- ~/.config/nvim/lua/plugins/tuiter.lua (LazyVim) or any lazy.nvim spec
 {
   "TheNeovimmer/tuiter",
+  branch = "main",
+  dependencies = {}, -- zero plugin dependencies: pure Lua + curl only
   cmd = { "Tuiter", "TuiterRun", "TuiterRunAll", "TuiterSaveBody", "TuiterHistory", "TuiterEnv", "TuiterResponse", "TuiterCopyAs" },
   ft = { "http", "graphql" },
   opts = {},

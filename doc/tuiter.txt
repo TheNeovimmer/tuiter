@@ -37,6 +37,8 @@ plugin dependencies (requests go out via `curl` over |vim.system()|).
 Install with lazy.nvim / LazyVim: >
   {
     "TheNeovimmer/tuiter",
+    branch = "main",
+    dependencies = {}, -- zero plugin dependencies: pure Lua + curl only
     cmd = { "Tuiter", "TuiterRun", "TuiterRunAll", "TuiterSaveBody",
             "TuiterHistory", "TuiterEnv", "TuiterResponse", "TuiterCopyAs" },
     ft = { "http", "graphql" },
