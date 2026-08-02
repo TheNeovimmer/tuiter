@@ -10,9 +10,9 @@ Insomnia/Postman for your editor, written in pure Lua.
 
 - **`.http` request files** — REST Client format: methods, headers, bodies, named `###` sections, `# @name`
 - **Insomnia-style composer** — methods color-coded in the file itself, blue URLs, section titles, `@var`s
-- **Request sidebar** — Postman-style list of every request; run, jump, favorite (`*`), filter (`/`), copy-as-curl
+- **Request sidebar** — Postman-style list of every request; run, jump, favorite (`*`), filter (`/`), switch env (`e`), copy-as-curl
 - **Collection runner** — `<leader>ia` runs every request in the file and shows a ✓/✗ summary
-- **Async requests** — `curl` via `vim.system`, zero plugin dependencies
+- **Async requests** — `curl` via `vim.system`, zero plugin dependencies; cancel hanging requests with `<leader>ic`
 - **Response viewer with tabs** — Body / Headers / Timeline, like Insomnia's response pane
 - **Timeline tab** — per-phase timing breakdown (DNS, TCP, TLS, TTFB, download) from curl
 - **Status bar** — HTTP code · time · size · env, green/red, in every response window
@@ -94,10 +94,15 @@ Content-Type: application/json
 | `<leader>is` | Send request under cursor |
 | `<leader>il` | Request sidebar (like Postman's collection list) |
 | `<leader>ia` | Run all requests in the file, show summary |
+| `<leader>ic` | Cancel in-flight requests |
+| `<leader>ik` | Keymap help float |
 | `<leader>ih` | Request history (pick & re-run) |
 | `<leader>ie` | Select environment |
 | `<leader>ir` | Toggle response window |
 | `]r` / `[r` | Next / previous request |
+
+All keymaps are configurable — see [Configuration](#configuration). To
+skip one (or all), set it to `false` / pass `keymaps = false`.
 
 In insert mode, `<C-x><C-o>` completes `{{var}}` placeholders (request vars,
 env vars, dynamic values).
@@ -110,10 +115,11 @@ URL, and the last response status (`[200]`/`[404]` marks).
 
 | Key | Action |
 |---|---|
-| `<CR>` | Run request (sidebar closes) |
+| `<CR>` | Run request (sidebar stays open — response opens to its right) |
 | `g` | Jump to the request in the file |
 | `*` | Toggle favorite (persisted) |
 | `/` | Filter requests by name/URL/method (Insomnia-style search) |
+| `e` | Switch environment (sidebar re-renders) |
 | `a` | Run all requests |
 | `c` | Copy as curl |
 | `?` | Keymap help |
@@ -202,6 +208,7 @@ Authorization: Bearer {{$body.token}}
 | `:Tuiter` | Toggle request sidebar |
 | `:TuiterRun [lnum]` | Send request under cursor |
 | `:TuiterRunAll` | Run all requests, show summary |
+| `:TuiterCancel` | Cancel in-flight requests |
 | `:TuiterSaveBody` | Save last response body to a file |
 | `:TuiterHistory` | Pick a past request and re-run it |
 | `:TuiterEnv` | Select environment |
@@ -280,8 +287,9 @@ switch with `:TuiterEnv` or `<leader>ie`.
 ```lua
 {
   opts = {
-    keymaps = { -- or false to disable
+    keymaps = { -- false disables that key; keymaps = false disables all
       run = "<leader>is", list = "<leader>il", run_all = "<leader>ia",
+      cancel = "<leader>ic", help = "<leader>ik",
       history = "<leader>ih", env = "<leader>ie", response = "<leader>ir",
     },
     curl = { timeout = 30, insecure = false, max_redirects = 8 },
@@ -290,6 +298,9 @@ switch with `:TuiterEnv` or `<leader>ie`.
   },
 }
 ```
+
+Example — move everything off `<leader>i` and drop the ones you don't
+want: `opts = { keymaps = { run = "<leader>xr", list = "<leader>xl", cancel = false } }`.
 
 ## Development
 

@@ -112,6 +112,36 @@ assert(ui.state.favs["http://fav.test/x"] == true, "favorite set")
 ui.toggle_fav("http://fav.test/x")
 assert(ui.state.favs["http://fav.test/x"] == nil, "favorite unset")
 
+-- cancel an in-flight request
+client.cancel()
+assert(next(client.state.procs) == nil, "procs empty before cancel test")
+local canceled_done, cres = false, nil
+client.send(
+	{ method = "GET", url = "http://127.0.0.1:8999/slow", headers = {}, body = nil, vars = {}, cwd = "." },
+	{ timeout = 10 },
+	".",
+	function(r)
+		canceled_done = true
+		cres = r
+	end
+)
+assert(
+	vim.wait(1000, function()
+		return next(client.state.procs) ~= nil
+	end),
+	"request in flight"
+)
+client.cancel()
+assert(
+	vim.wait(4000, function()
+		return canceled_done
+	end),
+	"cancel callback fired"
+)
+eq(cres.ok, false, "canceled request not ok")
+eq(cres.status, 0, "canceled request has no status")
+assert(next(client.state.procs) == nil, "procs cleared after cancel")
+
 -- sidebar opens/closes
 local parser = require("tuiter.parser")
 ui.show_sidebar(

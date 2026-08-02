@@ -5,6 +5,7 @@ local M = {
 		env_file = nil,
 		env_vars = {},
 		response = nil, -- last response (for {{$body.*}} / {{$status}})
+		procs = {}, -- in-flight vim.system jobs (url or nothing -> job)
 	},
 }
 
@@ -203,8 +204,15 @@ end
 --- Parse curl output (built with -i and a trailing write-out marker line).
 --- Marker carries: code, total, size, namelookup, connect, appconnect,
 --- pretransfer, starttransfer, redirects (the old 3-field format still parses).
-function M.parse_response(stdout, stderr, exit_code, marker)
-	local resp = { ok = exit_code == 0, status = 0, headers = "", body = "", error = stderr }
+function M.parse_response(stdout, stderr, exit_code, marker, signal)
+	local killed = signal and signal ~= 0
+	local resp = {
+		ok = exit_code == 0 and not killed,
+		status = 0,
+		headers = "",
+		body = "",
+		error = killed and "request canceled" or stderr,
+	}
 	local code, t, size, nl, cn, ap, pr, st, red = stdout:match(
 		"\n" .. marker .. " (%d+) ([%d%.]+) (%d+) ([%d%.]+) ([%d%.]+) ([%d%.]+) ([%d%.]+) ([%d%.]+) (%d+)\r?\n?$"
 	)
@@ -217,14 +225,14 @@ function M.parse_response(stdout, stderr, exit_code, marker)
 		resp.time = tonumber(t)
 		resp.size = tonumber(size)
 		resp.times = nl
-			and {
-				namelookup = tonumber(nl),
-				connect = cn and tonumber(cn),
-				appconnect = ap and tonumber(ap),
-				pretransfer = pr and tonumber(pr),
-				starttransfer = st and tonumber(st),
-				total = tonumber(t),
-			}
+				and {
+					namelookup = tonumber(nl),
+					connect = cn and tonumber(cn),
+					appconnect = ap and tonumber(ap),
+					pretransfer = pr and tonumber(pr),
+					starttransfer = st and tonumber(st),
+					total = tonumber(t),
+				}
 			or nil
 		resp.redirects = red and tonumber(red)
 		local newpat = "\n" .. marker .. " %d+ [%d%.]+ %d+ [%d%.]+ [%d%.]+ [%d%.]+ [%d%.]+ [%d%.]+ %d+\r?\n?$"
@@ -282,9 +290,20 @@ function M.send(spec, curl_opts, cwd, cb)
 	local marker = "@@tuiter" .. seq .. "@@"
 	local args = M.curl_args(spec, curl_opts, marker)
 	local body = spec.body and M.substitute(spec.body, spec.vars) or nil
-	vim.system(args, { text = true, stdin = body or "" }, function(out)
-		cb(M.parse_response(out.stdout, out.stderr, out.code, marker))
+	local proc
+	proc = vim.system(args, { text = true, stdin = body or "" }, function(out)
+		M.state.procs[proc] = nil
+		cb(M.parse_response(out.stdout, out.stderr, out.code, marker, out.signal))
 	end)
+	M.state.procs[proc] = true
+end
+
+--- Kill every in-flight request (e.g. a hanging endpoint).
+function M.cancel()
+	for proc in pairs(M.state.procs) do
+		pcall(proc.kill, proc, 15) -- SIGTERM
+	end
+	M.state.procs = {}
 end
 
 local function shq(s) -- single-quote for shell, escaping embedded quotes

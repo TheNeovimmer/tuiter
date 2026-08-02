@@ -52,14 +52,17 @@ local METHOD_HL = {
 }
 
 local HELP_SECTIONS = {
-	{ "sidebar", "q close  <CR> run  g go-to-file  * favorite  / filter  a run all  c copy curl  ? help" },
+	{
+		"sidebar",
+		"q close  <CR> run (stays open)  g go-to-file  * favorite  / filter  e env  a run all  c copy curl  ? help",
+	},
 	{
 		"response",
 		"q close  1/2/3 or t tabs (body/headers/timeline)  p pretty/raw  y copy  c copy-curl  f save  z zoom  r resend  ? help",
 	},
 	{
 		"buffer",
-		"<leader>is send  <leader>il sidebar  <leader>ia run all  ]r/[r next/prev  <leader>ih history  <leader>ie env  <leader>ir response",
+		"<leader>is send  <leader>il sidebar  <leader>ia run all  <leader>ic cancel  <leader>ik help  ]r/[r next/prev  <leader>ih history  <leader>ie env  <leader>ir response",
 	},
 }
 
@@ -652,22 +655,25 @@ function M.show_sidebar(requests, opts)
 		title_pos = "center",
 	})
 	vim.wo[win].statusline =
-		"%#TuiterStatusHint# q=close  <CR>=run  g=go-to-file  *=favorite  /=filter  a=run-all  c=copy-curl  ?=help %*"
+		"%#TuiterStatusHint# q=close  <CR>=run  g=go-to-file  *=favorite  /=filter  e=env  a=run-all  c=copy-curl  ?=help %*"
 
 	buf_map(buf, "q", M.close_sidebar, "Close request list")
 	buf_map(buf, "?", M.toggle_help, "Show keymap help")
+	buf_map(buf, "e", function()
+		if opts.switch_env then
+			opts.switch_env()
+		end
+	end, "Switch environment")
 	buf_map(buf, "/", function()
 		vim.ui.input({ prompt = "Filter requests (empty clears):", default = M.state.filter }, function(f)
 			M.set_filter(f)
 		end)
 	end, "Filter requests")
 	buf_map(buf, "<CR>", function()
+		-- keep the sidebar open, like Insomnia's collection list
 		local spec = M.state.sidebar_entries[vim.api.nvim_win_get_cursor(0)[1]]
-		if spec then
-			M.close_sidebar()
-			if opts.run then
-				opts.run(spec)
-			end
+		if spec and opts.run then
+			opts.run(spec)
 		end
 	end, "Run request")
 	buf_map(buf, "g", function()

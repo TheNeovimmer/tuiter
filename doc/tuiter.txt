@@ -85,10 +85,15 @@ LazyVim; shown as a "tuiter" which-key group):
   <leader>is   Send request under cursor
   <leader>il   Request sidebar
   <leader>ia   Run all requests in the file (summary)
+  <leader>ic   Cancel in-flight requests
+  <leader>ik   Keymap help float
   <leader>ih   Request history (pick & re-run)
   <leader>ie   Select environment
   <leader>ir   Toggle response window
   ]r / [r      Next / previous request
+
+All keymaps are configurable via |tuiter-config|: set a key to false to
+skip it, or `keymaps = false` to disable all of them.
 
 In insert mode, `<C-x><C-o>` completes `{{var}}` placeholders (request
 vars, env vars, dynamic values).
@@ -101,10 +106,11 @@ the file: ★ favorites first, then color-coded methods (GET green, POST
 blue, PUT/PATCH yellow, DELETE red), name, URL, and the last response
 status as a `[200]`/`[404]` mark. A hint bar shows the keys.
 
-  <CR>   Run request (sidebar closes)
+  <CR>   Run request (sidebar stays open — response opens to its right)
   g      Jump to the request in the file
   *      Toggle favorite (persisted)
   /      Filter requests by name/URL/method (Insomnia-style search)
+  e      Switch environment (sidebar re-renders)
   a      Run all requests
   c      Copy as curl
   ?      Keymap help
@@ -181,6 +187,7 @@ records each response, so later requests can chain off earlier ones.
   :Tuiter                Toggle request sidebar
   :TuiterRun [lnum]      Send request under cursor
   :TuiterRunAll          Run all requests, show summary
+  :TuiterCancel          Cancel in-flight requests
   :TuiterSaveBody        Save last response body to a file
   :TuiterHistory         Pick a past request and re-run it
   :TuiterEnv             Select environment
@@ -201,8 +208,9 @@ current environment and last response. With lualine: >
 
 >  {
     opts = {
-      keymaps = { -- or false to disable
+      keymaps = { -- false disables that key; keymaps = false disables all
         run = "<leader>is", list = "<leader>il", run_all = "<leader>ia",
+        cancel = "<leader>ic", help = "<leader>ik",
         history = "<leader>ih", env = "<leader>ie", response = "<leader>ir",
       },
       curl = { timeout = 30, insecure = false, max_redirects = 8 },
@@ -211,6 +219,8 @@ current environment and last response. With lualine: >
     },
   }
 <
+Example — move everything off <leader>i: `opts = { keymaps = { run =
+"<leader>xr", list = "<leader>xl", cancel = false } }`.
 
 ==============================================================================
 13. PUBLIC API                                        *tuiter-api*

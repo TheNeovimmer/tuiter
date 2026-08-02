@@ -13,6 +13,8 @@ local config = {
 		run = "<leader>is", -- send request under cursor
 		list = "<leader>il", -- request sidebar (Postman-style)
 		run_all = "<leader>ia", -- run every request in the file
+		cancel = "<leader>ic", -- cancel in-flight requests
+		help = "<leader>ik", -- keymap help float
 		history = "<leader>ih",
 		env = "<leader>ie",
 		response = "<leader>ir", -- toggle response window
@@ -149,6 +151,8 @@ function M.jump_request(dir)
 end
 
 --- Open (or close) the request sidebar for the current .http buffer.
+--- The sidebar stays open while running (Insomnia-style); response floats
+--- open to its right.
 function M.sidebar()
 	if ui.sidebar_is_open() then
 		ui.close_sidebar()
@@ -157,7 +161,7 @@ function M.sidebar()
 	local buf = vim.api.nvim_get_current_buf()
 	if vim.bo[buf].buftype ~= "" then
 		-- inside a scratch/response buffer: reuse the last http buffer
-		buf = M.source_buf or 0
+		buf = (M.source_buf and vim.api.nvim_buf_is_valid(M.source_buf) and M.source_buf) or 0
 	end
 	local requests = parser.parse_lines(vim.api.nvim_buf_get_lines(buf, 0, -1, false))
 	if #requests == 0 then
@@ -166,24 +170,30 @@ function M.sidebar()
 	end
 	local dir = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(buf), ":p:h")
 	client.ensure_env(dir, config)
-	ui.show_sidebar(requests, {
-		title = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(buf), ":t"),
-		env = client.state.env,
-		run = function(spec)
-			spec.cwd = dir
-			M.resend(spec)
-		end,
-		go_to = function(lnum)
-			if vim.api.nvim_buf_is_valid(buf) then
-				vim.api.nvim_set_current_buf(buf)
-				vim.api.nvim_win_set_cursor(0, { lnum, 0 })
-			end
-		end,
-		copy_curl = copy_curl,
-		run_all = function()
-			M.run_all({ buf = buf })
-		end,
-	})
+	local function open()
+		ui.show_sidebar(requests, {
+			title = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(buf), ":t"),
+			env = client.state.env,
+			run = function(spec)
+				spec.cwd = dir
+				M.resend(spec)
+			end,
+			go_to = function(lnum)
+				if vim.api.nvim_buf_is_valid(buf) then
+					vim.api.nvim_set_current_buf(buf)
+					vim.api.nvim_win_set_cursor(0, { lnum, 0 })
+				end
+			end,
+			copy_curl = copy_curl,
+			run_all = function()
+				M.run_all({ buf = buf })
+			end,
+			switch_env = function()
+				M.select_env({ cwd = dir }, open)
+			end,
+		})
+	end
+	open()
 end
 
 --- Pick a past request from history and re-run it.
@@ -193,9 +203,17 @@ function M.history()
 	end)
 end
 
+--- Cancel all in-flight requests.
+function M.cancel()
+	client.cancel()
+	vim.notify("Tuiter: canceled in-flight requests", vim.log.levels.INFO, { title = "Tuiter" })
+end
+
 ---@param opts? {cwd?: string}
-function M.select_env(opts)
-	local cwd = (opts and opts.cwd) or vim.fn.getcwd()
+---@param on_select? fun(name: string) called after the environment is set
+function M.select_env(opts, on_select)
+	opts = opts or {}
+	local cwd = opts.cwd or vim.fn.getcwd()
 	local envs = client.envs(cwd, config)
 	if #envs == 0 then
 		vim.notify(
@@ -209,6 +227,9 @@ function M.select_env(opts)
 		if name then
 			client.set_env(name, cwd, config)
 			vim.notify(string.format("Tuiter: environment set to %q", name), vim.log.levels.INFO, { title = "Tuiter" })
+			if on_select then
+				on_select(name)
+			end
 		end
 	end)
 end
@@ -263,6 +284,14 @@ function M.setup_keymaps(buf)
 		map(km.run_all, function()
 			M.run_all({ buf = buf })
 		end, "Run all requests")
+	end
+	if km.cancel then
+		map(km.cancel, M.cancel, "Cancel in-flight requests")
+	end
+	if km.help then
+		map(km.help, function()
+			ui.toggle_help()
+		end, "Show keymap help")
 	end
 	if km.history then
 		map(km.history, M.history, "Request history")

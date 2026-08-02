@@ -16,6 +16,10 @@ vim.api.nvim_create_user_command("TuiterRunAll", function()
 	require("tuiter").run_all()
 end, { desc = "Run every request in the buffer and show a summary" })
 
+vim.api.nvim_create_user_command("TuiterCancel", function()
+	require("tuiter").cancel()
+end, { desc = "Cancel in-flight requests" })
+
 vim.api.nvim_create_user_command("TuiterSaveBody", function()
 	require("tuiter.ui").save_body()
 end, { desc = "Save the last response body to a file" })

@@ -14,6 +14,10 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
+        if self.path.startswith("/slow"):
+            import time
+
+            time.sleep(3)
         self._reply(200, {"method": "GET", "path": self.path})
 
     def do_POST(self):
