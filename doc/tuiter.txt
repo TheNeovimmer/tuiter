@@ -36,13 +36,15 @@ plugin dependencies (requests go out via `curl` over |vim.system()|).
 
 Install with lazy.nvim / LazyVim: >
   {
-    dir = "~/path/to/tuiter",
+    "TheNeovimmer/tuiter",
     cmd = { "Tuiter", "TuiterRun", "TuiterRunAll", "TuiterSaveBody",
             "TuiterHistory", "TuiterEnv", "TuiterResponse", "TuiterCopyAs" },
     ft = { "http", "graphql" },
     opts = {},
   }
 <
+The plugin lazy-loads: `cmd` triggers on any Tuiter* command, `ft` on
+opening a .http / .graphql file.
 ==============================================================================
 3. USAGE                                                *tuiter-usage*
 

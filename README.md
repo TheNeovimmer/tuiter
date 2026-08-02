@@ -1,7 +1,5 @@
 # tuiter
 
-[![CI](https://github.com/TheNeovimmer/tuiter/actions/workflows/ci.yml/badge.svg)](https://github.com/TheNeovimmer/tuiter/actions/workflows/ci.yml)
-
 Interactive API explorer for Neovim. Write requests in `.http` files, send
 them with one key, read the response in a floating window — with a
 Postman-style request sidebar, collections runner, history, environments,
@@ -37,13 +35,18 @@ Insomnia/Postman for your editor, written in pure Lua.
 ## Installation (LazyVim / lazy.nvim)
 
 ```lua
+-- ~/.config/nvim/lua/plugins/tuiter.lua (LazyVim) or any lazy.nvim spec
 {
-  dir = "~/path/to/tuiter", -- or "user/tuiter" once published
-  cmd = { "Tuiter", "TuiterRun", "TuiterRunAll", "TuiterSaveBody", "TuiterHistory", "TuiterEnv", "TuiterResponse" },
-  ft = "http",
+  "TheNeovimmer/tuiter",
+  cmd = { "Tuiter", "TuiterRun", "TuiterRunAll", "TuiterSaveBody", "TuiterHistory", "TuiterEnv", "TuiterResponse", "TuiterCopyAs" },
+  ft = { "http", "graphql" },
   opts = {},
 }
 ```
+
+All plugins load lazily: `cmd` triggers on any `Tuiter*` command, `ft` on
+opening a `.http` / `.graphql` file. Change the keymaps or skip them via
+`opts` — see [Configuration](#configuration).
 
 ## Usage
 
@@ -381,4 +384,3 @@ lua/tuiter/history.lua persisted request history
 - History lives in `stdpath("data")/tuiter/history.json`; favorites in
   `stdpath("data")/tuiter/favorites.json`; cookies per project in
   `stdpath("data")/tuiter/cookies/`.
-- CI runs `make test` + stylua on every push (`.github/workflows/ci.yml`).
