@@ -40,7 +40,8 @@ local function run_checks()
 		return r and r.status and r.status > 0
 	end)
 	eq(got, true, "TuiterRun completed a request")
-	-- diagnostics: break a line, write, expect a warning
+	-- diagnostics: break a line, write, expect a warning, then restore
+	local orig_first = vim.api.nvim_buf_get_lines(hbuf, 0, 1, false)
 	vim.api.nvim_set_current_buf(hbuf)
 	vim.api.nvim_buf_set_lines(hbuf, 0, 1, false, { "GET", "### x" })
 	vim.api.nvim_buf_call(hbuf, function()
@@ -48,6 +49,10 @@ local function run_checks()
 	end)
 	vim.wait(500, function() end)
 	eq(#vim.diagnostic.get(hbuf) >= 1, true, "diagnostics fire on malformed line")
+	vim.api.nvim_buf_set_lines(hbuf, 0, 2, false, orig_first)
+	vim.api.nvim_buf_call(hbuf, function()
+		vim.cmd("write")
+	end)
 
 	print(failed == 0 and "ALL LAZYVIM SMOKE TESTS PASSED" or (failed .. " SMOKE FAILURES"))
 	finish(failed == 0 and 0 or 1)
