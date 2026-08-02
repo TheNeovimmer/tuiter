@@ -60,7 +60,21 @@ assert(vim.json.decode(p.body).echo == '{"hello":"world"}', "POST echo: " .. vim
 -- response UI opens/closes headlessly
 ui.show(g, spec, {})
 assert(ui.state.body_win and vim.api.nvim_win_is_valid(ui.state.body_win), "body window missing")
-assert(ui.state.head_win and vim.api.nvim_win_is_valid(ui.state.head_win), "headers window missing")
+assert(ui.state.head_win and vim.api.nvim_win_is_valid(ui.state.head_win), "tab bar window missing")
+local tab_buf = vim.api.nvim_win_get_buf(ui.state.head_win)
+eq(
+	table.concat(vim.api.nvim_buf_get_lines(tab_buf, 0, -1, false), "\n"):match("Body") ~= nil,
+	true,
+	"tab bar shows Body"
+)
+-- tab switching: headers then timeline then body
+ui.set_tab(2)
+local cbuf = vim.api.nvim_win_get_buf(ui.state.body_win)
+eq(vim.api.nvim_buf_get_lines(cbuf, 0, -1, false)[1]:match("^HTTP/1.1 200") ~= nil, true, "headers tab")
+ui.set_tab(3)
+eq(vim.api.nvim_buf_get_lines(cbuf, 0, -1, false)[1]:match("DNS lookup") ~= nil, true, "timeline tab")
+ui.set_tab(1)
+eq(table.concat(vim.api.nvim_buf_get_lines(cbuf, 0, -1, false), "\n"):match('"path"') ~= nil, true, "body tab back")
 ui.close()
 assert(not (ui.state.body_win and vim.api.nvim_win_is_valid(ui.state.body_win)), "close failed")
 
@@ -100,12 +114,27 @@ assert(ui.state.favs["http://fav.test/x"] == nil, "favorite unset")
 
 -- sidebar opens/closes
 local parser = require("tuiter.parser")
-ui.show_sidebar(parser.parse_lines({ "### Get", "GET http://127.0.0.1:8999/api", "" }), {
-	title = "test",
-	run = function() end,
-	go_to = function() end,
-})
+ui.show_sidebar(
+	parser.parse_lines({
+		"### Get",
+		"GET http://127.0.0.1:8999/api",
+		"",
+		"### Post",
+		"POST http://127.0.0.1:8999/users",
+		"",
+	}),
+	{
+		title = "test",
+		run = function() end,
+		go_to = function() end,
+	}
+)
 assert(ui.sidebar_is_open(), "sidebar open")
+-- filter narrows the list and back
+ui.set_filter("post")
+eq(#vim.api.nvim_buf_get_lines(ui.state.sidebar_buf, 0, -1, false), 1, "sidebar filter narrows")
+ui.set_filter("")
+eq(#vim.api.nvim_buf_get_lines(ui.state.sidebar_buf, 0, -1, false), 2, "sidebar filter cleared")
 ui.close_sidebar()
 assert(not ui.sidebar_is_open(), "sidebar close")
 

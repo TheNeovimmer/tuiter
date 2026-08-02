@@ -68,6 +68,9 @@ end
 function M.run(opts)
 	opts = opts or {}
 	local buf = opts.buf or 0
+	if buf == 0 then
+		buf = vim.api.nvim_get_current_buf()
+	end
 	local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
 	local lnum = opts.lnum or vim.api.nvim_win_get_cursor(0)[1]
 	local spec = parser.at(parser.parse_lines(lines), lnum)
@@ -86,6 +89,9 @@ end
 function M.run_all(opts)
 	opts = opts or {}
 	local buf = opts.buf or 0
+	if buf == 0 then
+		buf = vim.api.nvim_get_current_buf()
+	end
 	local requests = parser.parse_lines(vim.api.nvim_buf_get_lines(buf, 0, -1, false))
 	if #requests == 0 then
 		vim.notify("Tuiter: no requests in this buffer", vim.log.levels.WARN, { title = "Tuiter" })

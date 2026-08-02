@@ -201,14 +201,35 @@ function M.substitute(str, request_vars)
 end
 
 --- Parse curl output (built with -i and a trailing write-out marker line).
+--- Marker carries: code, total, size, namelookup, connect, appconnect,
+--- pretransfer, starttransfer, redirects (the old 3-field format still parses).
 function M.parse_response(stdout, stderr, exit_code, marker)
 	local resp = { ok = exit_code == 0, status = 0, headers = "", body = "", error = stderr }
-	local code, t, size = stdout:match("\n" .. marker .. " (%d+) ([%d%.]+) (%d+)\r?\n?$")
+	local code, t, size, nl, cn, ap, pr, st, red = stdout:match(
+		"\n" .. marker .. " (%d+) ([%d%.]+) (%d+) ([%d%.]+) ([%d%.]+) ([%d%.]+) ([%d%.]+) ([%d%.]+) (%d+)\r?\n?$"
+	)
+	if not code then
+		-- legacy 3-field marker
+		code, t, size = stdout:match("\n" .. marker .. " (%d+) ([%d%.]+) (%d+)\r?\n?$")
+	end
 	if code then
 		resp.status = tonumber(code)
 		resp.time = tonumber(t)
 		resp.size = tonumber(size)
-		stdout = stdout:gsub("\n" .. marker .. " %d+ [%d%.]+ %d+\r?\n?$", "")
+		resp.times = nl
+			and {
+				namelookup = tonumber(nl),
+				connect = cn and tonumber(cn),
+				appconnect = ap and tonumber(ap),
+				pretransfer = pr and tonumber(pr),
+				starttransfer = st and tonumber(st),
+				total = tonumber(t),
+			}
+			or nil
+		resp.redirects = red and tonumber(red)
+		local newpat = "\n" .. marker .. " %d+ [%d%.]+ %d+ [%d%.]+ [%d%.]+ [%d%.]+ [%d%.]+ [%d%.]+ %d+\r?\n?$"
+		local oldpat = "\n" .. marker .. " %d+ [%d%.]+ %d+\r?\n?$"
+		stdout = stdout:gsub(newpat, ""):gsub(oldpat, "")
 	end
 	local head, body = stdout:match("^(.-)\r?\n\r?\n(.*)$")
 	if head then
@@ -242,7 +263,13 @@ function M.curl_args(spec, curl_opts, marker)
 		vim.list_extend(args, { "--data-binary", "@-" })
 	end
 	if marker then
-		vim.list_extend(args, { "-w", "\n" .. marker .. " %{http_code} %{time_total} %{size_download}" })
+		vim.list_extend(args, {
+			"-w",
+			string.format(
+				"\n%s %%{http_code} %%{time_total} %%{size_download} %%{time_namelookup} %%{time_connect} %%{time_appconnect} %%{time_pretransfer} %%{time_starttransfer} %%{num_redirects}",
+				marker
+			),
+		})
 	end
 	vim.list_extend(args, { M.substitute(spec.url, spec.vars) })
 	return args

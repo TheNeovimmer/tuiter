@@ -9,10 +9,13 @@ Insomnia/Postman for your editor, written in pure Lua.
 ## Features
 
 - **`.http` request files** — REST Client format: methods, headers, bodies, named `###` sections, `# @name`
-- **Request sidebar** — Postman-style list of every request; run, jump, favorite (`*`), copy-as-curl
+- **Insomnia-style composer** — methods color-coded in the file itself, blue URLs, section titles, `@var`s
+- **Request sidebar** — Postman-style list of every request; run, jump, favorite (`*`), filter (`/`), copy-as-curl
 - **Collection runner** — `<leader>ia` runs every request in the file and shows a ✓/✗ summary
 - **Async requests** — `curl` via `vim.system`, zero plugin dependencies
-- **Response window** — status bar (HTTP code · time · size), headers, body; JSON pretty/raw toggle, zoom
+- **Response viewer with tabs** — Body / Headers / Timeline, like Insomnia's response pane
+- **Timeline tab** — per-phase timing breakdown (DNS, TCP, TLS, TTFB, download) from curl
+- **Status bar** — HTTP code · time · size · env, green/red, in every response window
 - **Dynamic variables** — `{{$timestamp}}`, `{{$uuid}}`, `{{$randomInt}}`, … and response chaining via `{{$body.path.to.field}}`
 - **Copy as curl** — Insomnia-style shell-safe curl command, one key
 - **History** — every request is stored and replayable from a picker
@@ -110,6 +113,7 @@ URL, and the last response status (`[200]`/`[404]` marks).
 | `<CR>` | Run request (sidebar closes) |
 | `g` | Jump to the request in the file |
 | `*` | Toggle favorite (persisted) |
+| `/` | Filter requests by name/URL/method (Insomnia-style search) |
 | `a` | Run all requests |
 | `c` | Copy as curl |
 | `?` | Keymap help |
@@ -123,21 +127,30 @@ line jumps to that request in the file.
 
 ### Response window
 
-Headers on top, body below. JSON bodies are pretty-printed and
-treesitter-highlighted; a status bar shows `tuiter · METHOD URL · HTTP 200
-OK · 123ms · 1.2KB · env: dev` (green when ok, red on error/4xx-5xx).
+Insomnia-style: a tab bar (Body | Headers | Timeline) over the response,
+with a status bar showing `tuiter · METHOD URL · HTTP 200 OK · 123ms ·
+1.2KB · env: dev` (green when ok, red on error/4xx-5xx). The tab bar shows
+HTTP status · time · size on the right.
 
 | Key | Action |
 |---|---|
+| `1` / `2` / `3` | Body / Headers / Timeline tab |
+| `t` | Cycle tabs |
 | `q` | Close response |
-| `t` | Toggle headers window |
 | `p` | Toggle pretty / raw JSON body |
-| `y` | Copy body to the yank register |
+| `y` | Copy current tab (body, headers, or timeline) |
 | `c` | Copy as curl command (Insomnia-style) |
 | `f` | Save body to a file (`:TuiterSaveBody`) |
-| `z` | Zoom: body fills the screen (headers hidden) |
+| `z` | Zoom: response fills the screen (tab bar hidden) |
 | `r` | Resend the request |
 | `?` | Keymap help |
+
+- **Body tab**: JSON is pretty-printed, treesitter-highlighted and
+  foldable (`zc`/`zo`); HTML/XML/CSS/JS bodies get their filetype syntax too
+- **Headers tab**: response headers with keys highlighted
+- **Timeline tab**: per-phase timings — DNS lookup, TCP connect, TLS
+  handshake, request sent, waiting (TTFB), download, total — plus size,
+  redirects, protocol and content type
 
 ### Dynamic variables & response chaining
 

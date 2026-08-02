@@ -1,22 +1,26 @@
---- Response UI: floating windows for responses + a Postman-style request
---- sidebar. Favorites, zoom, copy-as-curl, run-all summary, keymap help.
+--- Response UI: Insomnia-style floating windows — a tab bar (Body | Headers |
+--- Timeline) over a response viewer, plus the request sidebar, favorites,
+--- zoom, copy-as-curl, run-all summary and keymap help.
 local client = require("tuiter.client")
 
 local M = {
 	state = {
-		head_win = nil,
-		body_win = nil,
+		head_win = nil, -- tab bar window
+		body_win = nil, -- content window
 		help_win = nil,
 		summary_win = nil,
 		last = nil, -- { resp, spec, opts } of the last shown response
+		tab = 1, -- 1=body 2=headers 3=timeline
 		pretty = true, -- pretty vs raw JSON body
 		display = nil, -- { raw, pretty, json } of the shown body
 		results = {}, -- url -> http status, shown as marks in the sidebar
-		zoomed = false, -- body window maximized (headers hidden)
+		zoomed = false, -- content maximized (tab bar hidden)
 		favs = {}, -- url -> true (persisted)
+		filter = "", -- sidebar filter
 		sidebar_win = nil,
 		sidebar_buf = nil,
 		sidebar_requests = {}, -- specs backing the current sidebar
+		sidebar_entries = {}, -- entries currently listed (filtered)
 		sidebar_opts = nil,
 	},
 }
@@ -34,6 +38,10 @@ vim.api.nvim_set_hl(0, "TuiterStar", { default = true, fg = "#f0c674" })
 vim.api.nvim_set_hl(0, "TuiterStatusOk", { default = true, fg = "#0d1117", bg = "#3fb950" })
 vim.api.nvim_set_hl(0, "TuiterStatusErr", { default = true, fg = "#0d1117", bg = "#f85149" })
 vim.api.nvim_set_hl(0, "TuiterStatusHint", { default = true, fg = "#9da5b4", bg = "#24292f" })
+vim.api.nvim_set_hl(0, "TuiterUrl", { default = true, fg = "#79c0ff" })
+vim.api.nvim_set_hl(0, "TuiterSection", { link = "Title" })
+vim.api.nvim_set_hl(0, "TuiterVar", { default = true, fg = "#f0c674" })
+vim.api.nvim_set_hl(0, "TuiterHeaderKey", { default = true, fg = "#79c0ff" })
 
 local METHOD_HL = {
 	GET = "TuiterGet",
@@ -44,8 +52,11 @@ local METHOD_HL = {
 }
 
 local HELP_SECTIONS = {
-	{ "sidebar", "q close  <CR> run  g go-to-file  * favorite  a run all  c copy curl  ? help" },
-	{ "response", "q close  t headers  p pretty/raw  y copy body  c copy curl  f save body  z zoom  r resend  ? help" },
+	{ "sidebar", "q close  <CR> run  g go-to-file  * favorite  / filter  a run all  c copy curl  ? help" },
+	{
+		"response",
+		"q close  1/2/3 or t tabs (body/headers/timeline)  p pretty/raw  y copy  c copy-curl  f save  z zoom  r resend  ? help",
+	},
 	{
 		"buffer",
 		"<leader>is send  <leader>il sidebar  <leader>ia run all  ]r/[r next/prev  <leader>ih history  <leader>ie env  <leader>ir response",
@@ -77,6 +88,31 @@ local function is_json(resp)
 		return true
 	end
 	return resp.body:match("^%s*[%[{%]") ~= nil
+end
+
+local function content_type(resp)
+	local ct = resp.headers:lower():match("content%-type:%s*([^;\r\n]*)") or ""
+	return ct:gsub("^%s+", "")
+end
+
+local function body_filetype(resp)
+	local ct = content_type(resp)
+	if ct:match("json") then
+		return "json"
+	end
+	if ct:match("html") then
+		return "html"
+	end
+	if ct:match("xml") then
+		return "xml"
+	end
+	if ct:match("css") then
+		return "css"
+	end
+	if ct:match("javascript") or ct:match("ecmascript") then
+		return "javascript"
+	end
+	return nil
 end
 
 local function mk_buf()
@@ -129,7 +165,7 @@ function M.toggle_fav(url)
 end
 
 -- ---------------------------------------------------------------------------
--- Response windows
+-- Response windows (Insomnia-style: tab bar + content)
 -- ---------------------------------------------------------------------------
 
 function M.close()
@@ -150,35 +186,29 @@ local function float_col()
 	return col
 end
 
-local function open_floats(head_buf, head_lines, body_buf, head_title, body_title)
+local function open_floats(tab_buf, body_buf, body_title)
 	local cols, rows = vim.o.columns, vim.o.lines
 	local col = float_col()
 	local width = math.max(50, math.min(120, cols - col - 2))
 	local zoomed = M.state.zoomed
 	local head_win = nil
-	local body_h
-	if zoomed then
-		body_h = math.min(rows - 6, 60)
-	else
-		local head_h = math.min(#head_lines + 2, 12)
-		body_h = math.max(5, math.min(40, rows - head_h - 12))
-		head_win = vim.api.nvim_open_win(head_buf, false, {
+	local body_h = zoomed and math.min(rows - 6, 60) or math.max(5, math.min(40, rows - 12))
+	if not zoomed then
+		head_win = vim.api.nvim_open_win(tab_buf, false, {
 			relative = "editor",
 			width = width,
-			height = head_h,
+			height = 1,
 			row = 2,
 			col = col,
-			border = "rounded",
+			border = "none",
 			style = "minimal",
-			title = " " .. head_title .. " ",
-			title_pos = "center",
 		})
 	end
 	local body_win = vim.api.nvim_open_win(body_buf, true, {
 		relative = "editor",
 		width = width,
 		height = body_h,
-		row = zoomed and 2 or 3 + math.min(#head_lines + 2, 12),
+		row = zoomed and 2 or 3,
 		col = col,
 		border = "rounded",
 		style = "minimal",
@@ -186,6 +216,140 @@ local function open_floats(head_buf, head_lines, body_buf, head_title, body_titl
 		title_pos = "center",
 	})
 	return head_win, body_win
+end
+
+local TAB_NAMES = { "Body", "Headers", "Timeline" }
+
+local function render_tabs()
+	local resp, spec = M.state.last.resp, M.state.last.spec
+	if not is_valid(M.state.head_win) then
+		return
+	end
+	local buf = vim.api.nvim_win_get_buf(M.state.head_win)
+	local width = vim.api.nvim_win_get_width(M.state.head_win)
+	local line = " "
+	for i, name in ipairs(TAB_NAMES) do
+		if i > 1 then
+			line = line .. " | "
+		end
+		line = line .. name
+	end
+	local reason = resp.headers:match("^HTTP/%S+ %d+ ([^\r\n]*)") or ""
+	local ok = resp.ok and resp.status < 400
+	local status = string.format(
+		"HTTP %d%s · %dms · %s",
+		resp.status,
+		reason ~= "" and (" " .. reason) or "",
+		(resp.time or 0) * 1000,
+		fmt_size(resp.size)
+	)
+	if #line + #status + 3 < width then
+		line = line .. string.rep(" ", width - #line - #status) .. status
+	end
+	vim.bo[buf].modifiable = true
+	vim.api.nvim_buf_set_lines(buf, 0, -1, false, { line })
+	vim.bo[buf].modifiable = false
+	local pos = 1 -- 0-based col where each tab starts
+	for i, name in ipairs(TAB_NAMES) do
+		local seg = (i > 1 and " | " or " ") .. name
+		vim.api.nvim_buf_add_highlight(buf, -1, i == M.state.tab and "TabLineSel" or "TabLine", 0, pos, pos + #seg)
+		pos = pos + #seg
+	end
+	local stpos = line:find(status, 1, true)
+	if stpos then
+		vim.api.nvim_buf_add_highlight(buf, -1, ok and "TuiterOk" or "TuiterError", 0, stpos - 1, stpos - 1 + #status)
+	end
+end
+
+--- Rows for the Insomnia-style "Timeline" tab (from curl timing data).
+function M.timeline_lines(resp)
+	local ts = resp.times or {}
+	local function ms(v)
+		return v and math.floor(v * 1000) or nil
+	end
+	local function delta(a, b)
+		if a and b and b >= a then
+			return b - a
+		end
+		return nil
+	end
+	local rows = {
+		{ "DNS lookup", ms(ts.namelookup) },
+		{ "TCP connect", ms(delta(ts.namelookup, ts.connect)) },
+		{ "TLS handshake", ms(delta(ts.connect, ts.appconnect)) },
+		{ "Request sent", ms(delta(ts.appconnect, ts.pretransfer)) },
+		{ "Waiting (TTFB)", ms(delta(ts.pretransfer, ts.starttransfer)) },
+		{ "Download", ms(delta(ts.starttransfer, ts.total)) },
+		{ "Total", ms(ts.total) },
+	}
+	local lines, w = {}, 22
+	for _, r in ipairs(rows) do
+		lines[#lines + 1] = ("%-" .. w .. "s %s"):format(r[1], r[2] and (r[2] .. "ms") or "–")
+	end
+	lines[#lines + 1] = ("-"):rep(w + 6)
+	lines[#lines + 1] = ("%-" .. w .. "s %s"):format("Size", fmt_size(resp.size))
+	lines[#lines + 1] = ("%-" .. w .. "s %s"):format("Redirects", tostring(resp.redirects or 0))
+	local proto = resp.headers:match("^(HTTP/%S+)") or ""
+	if proto ~= "" then
+		lines[#lines + 1] = ("%-" .. w .. "s %s"):format("Protocol", proto)
+	end
+	local ct = content_type(resp)
+	if ct ~= "" then
+		lines[#lines + 1] = ("%-" .. w .. "s %s"):format("Content type", ct)
+	end
+	return lines
+end
+
+local function render_content()
+	if not is_valid(M.state.body_win) or not M.state.last then
+		return
+	end
+	local buf = vim.api.nvim_win_get_buf(M.state.body_win)
+	local resp = M.state.last.resp
+	vim.bo[buf].modifiable = true
+	if M.state.tab == 1 then
+		local d = M.state.display
+		local content = d.raw
+		if d.json and M.state.pretty and d.pretty then
+			content = d.pretty
+		end
+		if content == "" then
+			content = "(empty body)"
+		end
+		vim.api.nvim_buf_set_lines(buf, 0, -1, false, vim.split(content, "\n"))
+		local ft = d.json and "json" or body_filetype(resp)
+		if ft then
+			vim.bo[buf].filetype = ft
+			pcall(vim.treesitter.start, buf, ft)
+		end
+		if d.json then
+			vim.wo[M.state.body_win].foldmethod = "expr"
+			vim.wo[M.state.body_win].foldexpr = "v:lua.vim.treesitter.foldexpr()"
+			vim.wo[M.state.body_win].foldlevel = 99
+		else
+			vim.wo[M.state.body_win].foldmethod = "manual"
+		end
+	elseif M.state.tab == 2 then
+		local hlines = resp.headers ~= "" and vim.split(resp.headers, "\n") or { "(no headers)" }
+		vim.api.nvim_buf_set_lines(buf, 0, -1, false, hlines)
+		vim.bo[buf].filetype = "text"
+		vim.wo[M.state.body_win].foldmethod = "manual"
+		for i, hl in ipairs(hlines) do
+			local key = hl:match("^([^:]+):")
+			if key then
+				vim.api.nvim_buf_add_highlight(buf, -1, "TuiterHeaderKey", i - 1, 0, #key)
+			end
+		end
+	else
+		local tlines = M.timeline_lines(resp)
+		vim.api.nvim_buf_set_lines(buf, 0, -1, false, tlines)
+		vim.bo[buf].filetype = "text"
+		vim.wo[M.state.body_win].foldmethod = "manual"
+		for i, tl in ipairs(tlines) do
+			vim.api.nvim_buf_add_highlight(buf, -1, "Comment", i - 1, 22, -1)
+		end
+	end
+	vim.bo[buf].modifiable = false
 end
 
 local function set_statusline(win, resp, spec)
@@ -213,50 +377,31 @@ function M.show(resp, spec, opts)
 	M.mark(spec.url, resp.status)
 	M.close()
 
-	-- status summary for the headers window title
-	local reason = resp.headers:match("^HTTP/%S+ %d+ ([^\r\n]*)") or ""
-	local status_line = string.format(
-		"HTTP %d%s · %.0fms · %s",
-		resp.status,
-		reason ~= "" and (" " .. reason) or "",
-		(resp.time or 0) * 1000,
-		fmt_size(resp.size)
-	)
-	if not resp.ok and resp.error and resp.error ~= "" then
-		status_line = status_line .. " · " .. resp.error:gsub("%s+", " "):sub(1, 60)
-	end
-
-	local head_buf = mk_buf()
-	local hlines = resp.headers ~= "" and vim.split(resp.headers, "\n") or { "(no headers)" }
-	vim.api.nvim_buf_set_lines(head_buf, 0, -1, false, hlines)
-	vim.bo[head_buf].modifiable = false
-
-	local body_buf = mk_buf()
 	local json = is_json(resp)
 	local pretty = json and client.pretty_json(resp.body) or nil
 	M.state.pretty = json and pretty ~= nil
 	M.state.display = { raw = resp.body, pretty = pretty, json = json }
-	local body = M.state.pretty and (pretty or resp.body) or resp.body
-	if body == "" then
-		body = "(empty body)"
-	end
-	vim.api.nvim_buf_set_lines(body_buf, 0, -1, false, vim.split(body, "\n"))
-	if json then
-		vim.bo[body_buf].filetype = "json"
-		pcall(vim.treesitter.start, body_buf, "json")
-	end
-	vim.bo[body_buf].modifiable = false
 
+	local tab_buf = mk_buf()
+	local body_buf = mk_buf()
 	local env = spec.env and ("(env: " .. spec.env .. ")") or ""
-	local head_win, body_win =
-		open_floats(head_buf, hlines, body_buf, "response headers", string.format("%s %s %s", spec.method, spec.url, env))
+	local head_win, body_win = open_floats(tab_buf, body_buf, string.format("%s %s %s", spec.method, spec.url, env))
 
-	buf_map(head_buf, "q", M.close, "Close response")
-	buf_map(head_buf, "t", M.toggle_headers, "Toggle headers")
-	buf_map(body_buf, "q", M.close, "Close response")
-	buf_map(body_buf, "t", M.toggle_headers, "Toggle headers")
+	for _, b in ipairs({ tab_buf, body_buf }) do
+		buf_map(b, "q", M.close, "Close response")
+		buf_map(b, "t", M.cycle_tab, "Next tab")
+		buf_map(b, "1", function()
+			M.set_tab(1)
+		end, "Body tab")
+		buf_map(b, "2", function()
+			M.set_tab(2)
+		end, "Headers tab")
+		buf_map(b, "3", function()
+			M.set_tab(3)
+		end, "Timeline tab")
+	end
 	buf_map(body_buf, "p", M.toggle_pretty, "Toggle pretty/raw body")
-	buf_map(body_buf, "y", M.yank_body, "Copy body")
+	buf_map(body_buf, "y", M.yank_body, "Copy current tab")
 	buf_map(body_buf, "f", M.save_body, "Save body to file")
 	buf_map(body_buf, "z", M.toggle_zoom, "Zoom response")
 	buf_map(body_buf, "?", M.toggle_help, "Show keymap help")
@@ -274,15 +419,25 @@ function M.show(resp, spec, opts)
 	vim.wo[body_win].wrap = true
 	set_statusline(body_win, resp, spec)
 	M.state.head_win, M.state.body_win = head_win, body_win
+	render_tabs()
+	render_content()
 end
 
-function M.toggle_headers()
-	if is_valid(M.state.head_win) then
-		pcall(vim.api.nvim_win_close, M.state.head_win, true)
-		M.state.head_win = nil
-	elseif M.state.last then
-		M.show(M.state.last.resp, M.state.last.spec, M.state.last.opts)
+--- Switch the response tab (1=Body, 2=Headers, 3=Timeline).
+function M.set_tab(n)
+	if not M.state.last then
+		return
 	end
+	M.state.tab = n
+	render_tabs()
+	render_content()
+	if is_valid(M.state.body_win) then
+		vim.api.nvim_set_current_win(M.state.body_win)
+	end
+end
+
+function M.cycle_tab()
+	M.set_tab(M.state.tab % #TAB_NAMES + 1)
 end
 
 function M.toggle_zoom()
@@ -293,20 +448,18 @@ function M.toggle_zoom()
 end
 
 function M.toggle_pretty()
-	local d = M.state.display
-	if not d or not is_valid(M.state.body_win) then
+	if not M.state.display or not is_valid(M.state.body_win) then
 		return
 	end
-	if not d.json then
+	if not M.state.display.json then
 		vim.notify("Tuiter: body is not JSON", vim.log.levels.INFO, { title = "Tuiter" })
 		return
 	end
+	if M.state.tab ~= 1 then
+		M.set_tab(1)
+	end
 	M.state.pretty = not M.state.pretty
-	local content = M.state.pretty and (d.pretty or d.raw) or d.raw
-	local buf = vim.api.nvim_win_get_buf(M.state.body_win)
-	vim.bo[buf].modifiable = true
-	vim.api.nvim_buf_set_lines(buf, 0, -1, false, vim.split(content, "\n"))
-	vim.bo[buf].modifiable = false
+	render_content()
 end
 
 function M.yank_body()
@@ -316,7 +469,7 @@ function M.yank_body()
 	local buf = vim.api.nvim_win_get_buf(M.state.body_win)
 	local text = table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n")
 	vim.fn.setreg('"', text)
-	vim.notify("Tuiter: response body copied", vim.log.levels.INFO, { title = "Tuiter" })
+	vim.notify("Tuiter: " .. TAB_NAMES[M.state.tab]:lower() .. " copied", vim.log.levels.INFO, { title = "Tuiter" })
 end
 
 function M.save_body()
@@ -371,7 +524,7 @@ function M.toggle_help()
 		vim.api.nvim_buf_add_highlight(buf, -1, "Title", (i - 1) * 3, 0, -1)
 	end
 	local cols, rows = vim.o.columns, vim.o.lines
-	local width = math.min(90, cols - 8)
+	local width = math.min(100, cols - 8)
 	local height = math.min(#lines + 2, rows - 4)
 	local win = vim.api.nvim_open_win(buf, true, {
 		relative = "editor",
@@ -402,18 +555,18 @@ function M.close_sidebar()
 		pcall(vim.api.nvim_win_close, M.state.sidebar_win, true)
 	end
 	M.state.sidebar_win, M.state.sidebar_buf = nil, nil
-	M.state.sidebar_requests, M.state.sidebar_opts = {}, nil
+	M.state.sidebar_requests, M.state.sidebar_entries, M.state.sidebar_opts = {}, {}, nil
 end
 
---- Show the request list.
---- opts: { title, env, run = fn(spec), go_to = fn(lnum), copy_curl = fn(spec), run_all = fn() }
-function M.show_sidebar(requests, opts)
-	M.close_sidebar()
-	if #requests == 0 then
-		return
+local function matches_filter(r, f)
+	if f == "" then
+		return true
 	end
-	M.state.sidebar_requests, M.state.sidebar_opts = requests, opts
+	local hay = (r.method .. " " .. r.name .. " " .. r.url):lower()
+	return hay:find(f:lower(), 1, true) ~= nil
+end
 
+local function sidebar_entries(requests)
 	-- favorites first, then the rest, preserving file order
 	local entries = {}
 	for _, r in ipairs(requests) do
@@ -426,10 +579,41 @@ function M.show_sidebar(requests, opts)
 			entries[#entries + 1] = r
 		end
 	end
+	local f = M.state.filter
+	if f == "" then
+		return entries
+	end
+	local filtered = {}
+	for _, r in ipairs(entries) do
+		if matches_filter(r, f) then
+			filtered[#filtered + 1] = r
+		end
+	end
+	return filtered
+end
+
+--- Set the sidebar filter ("" clears). Re-renders the list.
+function M.set_filter(text)
+	M.state.filter = text or ""
+	if is_valid(M.state.sidebar_win) then
+		M.show_sidebar(M.state.sidebar_requests, M.state.sidebar_opts)
+	end
+end
+
+--- Show the request list.
+--- opts: { title, env, run = fn(spec), go_to = fn(lnum), copy_curl = fn(spec), run_all = fn() }
+function M.show_sidebar(requests, opts)
+	M.close_sidebar()
+	if #requests == 0 then
+		return
+	end
+	M.state.sidebar_requests, M.state.sidebar_opts = requests, opts
+	local entries = sidebar_entries(requests)
+	M.state.sidebar_entries = entries
 
 	local buf = mk_buf()
 	local lines = {}
-	for i, r in ipairs(entries) do
+	for _, r in ipairs(entries) do
 		local mark = M.state.results[r.url] and string.format("[%d]", M.state.results[r.url]) or "    "
 		local star = M.state.favs[r.url] and "★" or " "
 		local label = r.name ~= "" and r.name or r.url
@@ -453,6 +637,9 @@ function M.show_sidebar(requests, opts)
 	if opts.env then
 		title = title .. " (env: " .. opts.env .. ")"
 	end
+	if M.state.filter ~= "" then
+		title = title .. "  filter: " .. M.state.filter
+	end
 	local win = vim.api.nvim_open_win(buf, true, {
 		relative = "editor",
 		width = 62,
@@ -465,12 +652,17 @@ function M.show_sidebar(requests, opts)
 		title_pos = "center",
 	})
 	vim.wo[win].statusline =
-		"%#TuiterStatusHint# q=close  <CR>=run  g=go-to-file  *=favorite  a=run-all  c=copy-curl  ?=help %*"
+		"%#TuiterStatusHint# q=close  <CR>=run  g=go-to-file  *=favorite  /=filter  a=run-all  c=copy-curl  ?=help %*"
 
 	buf_map(buf, "q", M.close_sidebar, "Close request list")
 	buf_map(buf, "?", M.toggle_help, "Show keymap help")
+	buf_map(buf, "/", function()
+		vim.ui.input({ prompt = "Filter requests (empty clears):", default = M.state.filter }, function(f)
+			M.set_filter(f)
+		end)
+	end, "Filter requests")
 	buf_map(buf, "<CR>", function()
-		local spec = entries[vim.api.nvim_win_get_cursor(0)[1]]
+		local spec = M.state.sidebar_entries[vim.api.nvim_win_get_cursor(0)[1]]
 		if spec then
 			M.close_sidebar()
 			if opts.run then
@@ -479,13 +671,13 @@ function M.show_sidebar(requests, opts)
 		end
 	end, "Run request")
 	buf_map(buf, "g", function()
-		local spec = entries[vim.api.nvim_win_get_cursor(0)[1]]
+		local spec = M.state.sidebar_entries[vim.api.nvim_win_get_cursor(0)[1]]
 		if spec and opts.go_to then
 			opts.go_to(spec.line)
 		end
 	end, "Go to request in file")
 	buf_map(buf, "*", function()
-		local spec = entries[vim.api.nvim_win_get_cursor(0)[1]]
+		local spec = M.state.sidebar_entries[vim.api.nvim_win_get_cursor(0)[1]]
 		if spec then
 			M.toggle_fav(spec.url)
 		end
@@ -496,7 +688,7 @@ function M.show_sidebar(requests, opts)
 		end
 	end, "Run all requests")
 	buf_map(buf, "c", function()
-		local spec = entries[vim.api.nvim_win_get_cursor(0)[1]]
+		local spec = M.state.sidebar_entries[vim.api.nvim_win_get_cursor(0)[1]]
 		if spec and opts.copy_curl then
 			opts.copy_curl(spec)
 		end

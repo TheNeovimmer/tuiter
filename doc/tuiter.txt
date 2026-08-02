@@ -16,7 +16,8 @@ CONTENTS                                                *tuiter-contents*
 11. Statusline integration.................|tuiter-statusline|
 12. Configuration..........................|tuiter-config|
 13. Public API.............................|tuiter-api|
-14. Development............................|tuiter-development|
+14. Highlight groups.......................|tuiter-highlights|
+15. Development............................|tuiter-development|
 
 ==============================================================================
 1. INTRODUCTION                                      *tuiter-introduction*
@@ -103,10 +104,15 @@ status as a `[200]`/`[404]` mark. A hint bar shows the keys.
   <CR>   Run request (sidebar closes)
   g      Jump to the request in the file
   *      Toggle favorite (persisted)
+  /      Filter requests by name/URL/method (Insomnia-style search)
   a      Run all requests
   c      Copy as curl
   ?      Keymap help
   q      Close
+
+Composer: in `.http` files, request lines are highlighted like Insomnia's
+composer — color-coded methods, blue URLs, section titles (`###`), and
+@vars.
 
 ==============================================================================
 7. COLLECTION RUNNER                              *tuiter-run-all*
@@ -119,19 +125,28 @@ that request in the file. Run-all does not pollute history.
 ==============================================================================
 8. RESPONSE WINDOW                                *tuiter-response*
 
-Headers on top, body below. JSON bodies are pretty-printed and
-treesitter-highlighted. A status bar shows `tuiter · METHOD URL · HTTP 200
-OK · 123ms · 1.2KB · env: dev` — green when ok, red on error/4xx-5xx.
+Insomnia-style: a tab bar (Body | Headers | Timeline) over the response,
+with a status bar showing `tuiter · METHOD URL · HTTP 200 OK · 123ms ·
+1.2KB · env: dev` — green when ok, red on error/4xx-5xx. The tab bar
+shows HTTP status · time · size on the right.
 
-  q   Close response
-  t   Toggle headers window
-  p   Toggle pretty / raw JSON body
-  y   Copy body to the yank register
-  c   Copy as curl (shell-safe, Insomnia-style)
-  f   Save body to a file (:TuiterSaveBody)
-  z   Zoom: body fills the screen (headers hidden)
-  r   Resend the request
-  ?   Keymap help
+  1/2/3  Body / Headers / Timeline tab
+  t      Cycle tabs
+  q      Close response
+  p      Toggle pretty / raw JSON body
+  y      Copy current tab (body, headers, or timeline)
+  c      Copy as curl (shell-safe, Insomnia-style)
+  f      Save body to a file (:TuiterSaveBody)
+  z      Zoom: response fills the screen (tab bar hidden)
+  r      Resend the request
+  ?      Keymap help
+
+- Body tab: JSON is pretty-printed, treesitter-highlighted and foldable
+  (zc/zo); HTML/XML/CSS/JS bodies get their filetype syntax too
+- Headers tab: response headers with keys highlighted
+- Timeline tab: per-phase timings — DNS lookup, TCP connect, TLS
+  handshake, request sent, waiting (TTFB), download, total — plus size,
+  redirects, protocol and content type
 
 ==============================================================================
 9. DYNAMIC VARIABLES                              *tuiter-dynamic*
@@ -212,7 +227,24 @@ current environment and last response. With lualine: >
 >  require("tuiter").statusline()
 
 ==============================================================================
-14. DEVELOPMENT                                    *tuiter-development*
+15. HIGHLIGHT GROUPS                            *tuiter-highlights*
+
+Customize with |:highlight| (all `default = true`, so your colorscheme
+wins when it defines them):
+
+  TuiterGet/Put/Patch/Delete  method colors (GET green, POST blue,
+                              PUT/PATCH yellow, DELETE red)
+  TuiterOk / TuiterError      status marks and summary rows
+  TuiterUrl                   request URLs in .http files
+  TuiterSection               `###` section titles
+  TuiterVar                   `@name = value` variables
+  TuiterStar                  ★ favorite marks
+  TuiterHeaderKey             header names in the Headers tab
+  TuiterStatusOk/Err          response status bar background
+  TuiterStatusHint            sidebar hint bar
+
+==============================================================================
+15. DEVELOPMENT                                    *tuiter-development*
 
   make test    # headless unit tests + integration test against a local server
   make format  # stylua

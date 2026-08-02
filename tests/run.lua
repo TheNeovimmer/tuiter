@@ -3,6 +3,7 @@
 package.path = "./lua/?.lua;" .. package.path
 local parser = require("tuiter.parser")
 local client = require("tuiter.client")
+local ui = require("tuiter.ui")
 
 local failed = 0
 local function eq(got, want, label)
@@ -170,3 +171,50 @@ local found = vim.tbl_filter(function(it)
 	return it.word == "{{token}}"
 end, items)
 eq(#found == 1, true, "completion includes env var")
+
+-- --- extended curl timing (-w marker with 9 fields) ---
+local ex = client.parse_response(
+	"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{}"
+		.. "\n@@tuiter9@@ 200 0.223 12 0.01 0.04 0.09 0.10 0.22 1",
+	"",
+	0,
+	"@@tuiter9@@"
+)
+eq(ex.time, 0.223, "extended total time")
+eq(ex.size, 12, "extended size")
+eq(ex.times.starttransfer, 0.22, "extended starttransfer")
+eq(ex.times.namelookup, 0.01, "extended namelookup")
+eq(ex.redirects, 1, "extended redirects")
+eq(ex.body, "{}", "extended body intact")
+-- legacy 3-field marker still parses (old tests + old caches)
+local leg = client.parse_response("HTTP/1.1 200 OK\r\n\r\n{}" .. "\n@@tuiterL@@ 200 0.05 42", "", 0, "@@tuiterL@@")
+eq(leg.time, 0.05, "legacy time")
+eq(leg.size, 42, "legacy size")
+eq(leg.times, nil, "legacy no times table")
+
+-- --- timeline tab rendering ---
+local tl = ui.timeline_lines({
+	headers = "HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8",
+	body = "{}",
+	status = 200,
+	size = 12,
+	time = 0.223,
+	redirects = 1,
+	times = {
+		namelookup = 0.01,
+		connect = 0.04,
+		appconnect = 0.09,
+		pretransfer = 0.1,
+		starttransfer = 0.22,
+		total = 0.223,
+	},
+})
+eq(tl[1]:match("DNS lookup%s+10ms") ~= nil, true, "timeline DNS delta")
+eq(tl[2]:match("TCP connect%s+30ms") ~= nil, true, "timeline TCP delta")
+eq(tl[3]:match("TLS handshake%s+4%dms") ~= nil, true, "timeline TLS delta")
+eq(tl[6]:match("Download%s+3ms") ~= nil, true, "timeline download delta")
+eq(tl[7]:match("Total%s+223ms") ~= nil, true, "timeline total")
+eq(table.concat(tl, "\n"):match("Size%s+12B") ~= nil, true, "timeline size")
+eq(table.concat(tl, "\n"):match("Redirects%s+1") ~= nil, true, "timeline redirects")
+eq(table.concat(tl, "\n"):match("Protocol%s+HTTP/1.1") ~= nil, true, "timeline protocol")
+eq(table.concat(tl, "\n"):match("Content type%s+application/json") ~= nil, true, "timeline content type")
