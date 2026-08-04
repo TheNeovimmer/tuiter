@@ -3,6 +3,27 @@ local M = {}
 
 local MAX = 200
 
+-- Secrets never written to history (screenshots happen): the header VALUE is
+-- dropped entirely so a leaked history.json doesn't leak credentials.
+local REDACT_HEADERS = {
+	["authorization"] = true,
+	["proxy-authorization"] = true,
+	["cookie"] = true,
+	["x-api-key"] = true,
+	["x-auth-token"] = true,
+	["set-cookie"] = true,
+}
+
+local function redact_spec(spec)
+	local headers = {}
+	for k, v in pairs(spec.headers or {}) do
+		if not REDACT_HEADERS[k:lower()] then
+			headers[k] = v
+		end
+	end
+	return headers
+end
+
 local function file()
 	return vim.fn.stdpath("data") .. "/tuiter/history.json"
 end
@@ -32,7 +53,7 @@ function M.add(spec, resp)
 		spec = {
 			method = spec.method,
 			url = spec.url,
-			headers = spec.headers,
+			headers = redact_spec(spec),
 			body = spec.body,
 			vars = spec.vars,
 			name = spec.name or "",

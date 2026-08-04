@@ -54,7 +54,7 @@ eq(#vim.diagnostic.get(hbuf), 0, "no diagnostics in clean demo.http")
 vim.api.nvim_buf_set_lines(hbuf, 0, 1, false, { "GET", "### x" })
 vim.cmd("write")
 eq(#vim.diagnostic.get(hbuf) >= 1, true, "diagnostic fires on bad line")
-vim.api.nvim_buf_set_lines(hbuf, 0, 1, false, { "### Get users" })
+vim.api.nvim_buf_set_lines(hbuf, 0, 2, false, { "### List users (GET)" })
 vim.cmd("write")
 eq(#vim.diagnostic.get(hbuf), 0, "diagnostic clears")
 

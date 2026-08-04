@@ -5,6 +5,7 @@ local M = {
 		env_file = nil,
 		env_vars = {},
 		response = nil, -- last response (for {{$body.*}} / {{$status}})
+		responses = {}, -- name -> response, for named chaining {{name.body.x}}
 		procs = {}, -- in-flight vim.system jobs (url or nothing -> job)
 	},
 }
@@ -68,15 +69,29 @@ end
 function M.set_env(name, dir, opts)
 	local path = env_file_for(dir, opts)
 	local envs = path and read_env_file(path) or {}
+	local vars = {}
+	-- .env provides the base layer; the selected JSON env wins on conflicts
+	for k, v in pairs(M.dotenv(dir)) do
+		vars[k] = v
+	end
+	for k, v in pairs(type(envs[name]) == "table" and envs[name] or {}) do
+		vars[k] = v
+	end
 	M.state.env = name
 	M.state.env_file = path
-	M.state.env_vars = type(envs[name]) == "table" and envs[name] or {}
+	M.state.env_vars = vars
 end
 
 --- Load the default env the first time a project with an env file is used.
 function M.ensure_env(dir, opts)
 	local path = env_file_for(dir, opts)
 	if not path then
+		-- no env JSON: a .env file still gives us vars (as a synthetic env)
+		if #vim.tbl_keys(M.dotenv(dir)) > 0 and not (M.state.env == ".env" and M.state.env_file == nil) then
+			M.state.env = ".env"
+			M.state.env_file = nil
+			M.state.env_vars = M.dotenv(dir)
+		end
 		return
 	end
 	if M.state.env and M.state.env_file == path then
@@ -90,6 +105,14 @@ function M.ensure_env(dir, opts)
 		name = (opts.default_env and envs[opts.default_env] and opts.default_env) or names[1]
 	end
 	M.set_env(name, dir, opts)
+end
+
+--- Encode a JSON value back to its canonical string form, or the raw value.
+local function json_or_scalar(v)
+	if type(v) == "table" then
+		return vim.json.encode(v)
+	end
+	return tostring(v)
 end
 
 --- Dynamic values (Insomnia-style):
@@ -144,32 +167,81 @@ local function dynamic(name)
 		if not r then
 			return "{{" .. name .. "}}"
 		end
-		local ok, data = pcall(vim.json.decode, r.body)
-		if not ok then
+		local v = M.json_path(r.body, name:sub(7))
+		if v == nil then
 			return "{{" .. name .. "}}"
 		end
-		for part in name:sub(7):gmatch("[^%.]+") do
-			if type(data) ~= "table" then
-				return "{{" .. name .. "}}"
-			end
-			-- JSON array indexes are 0-based (Insomnia-style): .list.0 -> first item
-			local n = tonumber(part)
-			data = data[n and n + 1 or part]
-		end
-		if data == nil then
-			return "{{" .. name .. "}}"
-		end
-		if type(data) == "table" then
-			return vim.json.encode(data)
-		end
-		return tostring(data)
+		return json_or_scalar(v)
 	end
 	return nil
 end
 
---- Record the last response so later requests can reference it.
-function M.record_response(resp)
+--- Named response chaining: `{{login.body.token}}`, `{{login.status}}`,
+--- `{{login.body}}` — resolves against the stored response of the request
+--- named `login` (from `# @name login`). Returns nil when unknown.
+local function named_response(name)
+	local head = name:match("^([%w_]+)")
+	local r = head and M.state.responses[head]
+	if not r then
+		return nil
+	end
+	local rest = name:sub(#head + 1)
+	if rest == "" then
+		return nil -- bare name: nothing to extract
+	elseif rest == ".status" then
+		return tostring(r.status)
+	elseif rest == ".body" then
+		return r.body
+	elseif rest:sub(1, 6) == ".body." then
+		local v = M.json_path(r.body, rest:sub(7))
+		if v == nil then
+			return nil
+		end
+		return json_or_scalar(v)
+	end
+	return nil
+end
+
+--- Walk a decoded JSON value by dotted path parts. Array indexes are
+--- 0-based (Insomnia-style): `list.0` -> first element.
+local function walk(data, parts)
+	for _, part in ipairs(parts) do
+		if type(data) ~= "table" then
+			return nil
+		end
+		local n = tonumber(part)
+		data = data[n and n + 1 or part]
+	end
+	return data
+end
+
+--- Get a dotted path (.a.b.0.c) into a JSON string. Returns the decoded
+--- value (nil when the body isn't JSON or the path doesn't resolve).
+function M.json_path(body, dotted)
+	local ok, data = pcall(vim.json.decode, body)
+	if not ok then
+		return nil
+	end
+	local v = walk(data, vim.split(dotted, ".", { plain = true }))
+	if v == vim.NIL then
+		return nil -- JSON null behaves like a missing value
+	end
+	return v
+end
+
+--- Record the response so later requests can reference it. Stored both as
+--- the "last" response ({{$body.*}}, {{$status}}) and keyed by the request
+--- name ({url/login.body.token}) for named request chaining.
+function M.record_response(resp, spec)
 	M.state.response = resp
+	if spec then
+		if spec.name and spec.name ~= "" then
+			M.state.responses[spec.name] = resp
+		end
+		if spec.url then
+			M.state.responses[spec.url] = resp
+		end
+	end
 end
 
 local DYNAMIC_HINTS = {
@@ -247,9 +319,225 @@ function M.substitute(str, request_vars)
 			if d ~= nil then
 				return d
 			end
+			local nr = named_response(name)
+			if nr ~= nil then
+				return nr
+			end
 			return "{{" .. name .. "}}"
 		end)
 	)
+end
+
+-- ---------------------------------------------------------------------------
+-- Assertions (# @test) — small evaluator over a response.
+--   # @test status == 200
+--   # @test status < 500
+--   # @test body.token exists
+--   # @test body.error == null
+--   # @test body.items.length > 3
+--   # @test body.items contains "pending"
+--   # @test headers.content-type contains "json"
+--   # @test responseTime < 500
+-- ---------------------------------------------------------------------------
+
+local TEST_OPS = { "==", "!=", ">=", "<=", ">", "<", "contains", "matches", "exists", "missing" }
+
+local function test_lhs(value)
+	local kind, rest = value:match("^(%w+)%.?(.*)$")
+	if not kind then
+		return nil
+	end
+	if kind == "status" then
+		return function(resp)
+			return resp.status
+		end, rest
+	elseif kind == "responseTime" then
+		return function(resp)
+			return (resp.time or 0) * 1000
+		end, rest
+	elseif kind == "size" then
+		return function(resp)
+			return resp.size
+		end, rest
+	elseif kind == "headers" and rest ~= "" then
+		return function(resp)
+			for hk, hv in resp.headers:gmatch("([^:\r\n]+):%s*([^\r\n]*)") do
+				if hk:lower() == rest:lower() then
+					return hv:gsub("^%s+", "")
+				end
+			end
+			return nil
+		end,
+			""
+	elseif kind == "body" and rest == "" then
+		return function(resp)
+			return resp.body
+		end, ""
+	elseif kind == "body" and rest ~= "" then
+		return function(resp)
+			local v = M.json_path(resp.body, rest)
+			-- Postman/Bruno-style `.length` on an array/object parent
+			local sans = rest:match("^(.*)%.length$")
+			if v == nil and sans then
+				v = M.json_path(resp.body, sans)
+				if type(v) == "table" then
+					v = #v
+				end
+			end
+			return v
+		end,
+			""
+	end
+	return nil
+end
+
+local function test_rhs(value)
+	local v = value:gsub("^%s+", ""):gsub("%s+$", "")
+	if v == "null" or v == "" then
+		return nil
+	elseif v == "true" then
+		return true
+	elseif v == "false" then
+		return false
+	end
+	local q = v:match("^['\"](.*)['\"]$")
+	if q then
+		return q
+	end
+	local n = tonumber(v)
+	if n then
+		return n
+	end
+	return v
+end
+
+local function to_num(v)
+	if type(v) == "number" then
+		return v
+	end
+	if type(v) == "string" and tonumber(v) then
+		return tonumber(v)
+	end
+	return nil
+end
+
+local function compare(a, b, op)
+	local an, bn = to_num(a), to_num(b)
+	if op == "==" then
+		return an ~= nil and bn ~= nil and an == bn or tostring(a) == tostring(b)
+	elseif op == "!=" then
+		return not (an ~= nil and bn ~= nil and an == bn or tostring(a) == tostring(b))
+	end
+	if an == nil or bn == nil then
+		return false
+	end
+	if op == ">" then
+		return an > bn
+	elseif op == ">=" then
+		return an >= bn
+	elseif op == "<" then
+		return an < bn
+	elseif op == "<=" then
+		return an <= bn
+	end
+	return false
+end
+
+--- Evaluate a single `# @test` expression against a response.
+--- Returns { pass = boolean, actual = string|nil } (nil when unparseable).
+function M.eval_test(expr, resp)
+	local op
+	for _, candidate in ipairs(TEST_OPS) do
+		local i = expr:find(candidate, 1, true)
+		if i and (op == nil or i < expr:find(op, 1, true)) then
+			op = candidate
+		end
+	end
+	if not op then
+		return nil
+	end
+	local at = expr:find(op, 1, true)
+	local lhs_s, rhs_s = expr:sub(1, at - 1):gsub("%s+$", ""), expr:sub(at + #op)
+	local get, rest = test_lhs(lhs_s)
+	if not get then
+		return nil
+	end
+	if op == "exists" or op == "missing" then
+		local v = get(resp)
+		local present = v ~= nil and v ~= ""
+		return { pass = (op == "exists") == present, actual = present and json_or_scalar(v) or nil }
+	end
+	local lhs = get(resp)
+	local rhs = test_rhs(rhs_s)
+	if op == "contains" then
+		if type(lhs) == "table" then
+			-- array membership
+			return { pass = vim.tbl_contains(lhs, rhs), actual = lhs }
+		end
+		local hay = tostring(lhs or "")
+		return { pass = hay:find(tostring(rhs), 1, true) ~= nil, actual = lhs }
+	elseif op == "matches" then
+		local hay = tostring(lhs or "")
+		local ok, m = pcall(function()
+			return hay:find(rhs) ~= nil
+		end)
+		return { pass = ok and m, actual = lhs }
+	end
+	return { pass = compare(lhs, rhs, op), actual = lhs }
+end
+
+--- Evaluate a request's assertions; sets resp.tests + resp.failures.
+function M.eval_tests(tests, resp)
+	local results = {}
+	local fails = 0
+	for _, expr in ipairs(tests or {}) do
+		local r = M.eval_test(expr, resp)
+		if not r then
+			r = { pass = false, actual = nil, error = "unparseable" }
+		end
+		r.expr = expr
+		results[#results + 1] = r
+		if not r.pass then
+			fails = fails + 1
+		end
+	end
+	resp.tests = results
+	resp.failures = fails
+	return results
+end
+
+-- ---------------------------------------------------------------------------
+-- .env support: KEY=VALUE pairs from the nearest .env above the project dir.
+-- ---------------------------------------------------------------------------
+
+--- Load KEY=VALUE pairs from the nearest `.env` above `dir` ({} when none).
+function M.dotenv(dir)
+	if not dir then
+		return {}
+	end
+	local d = dir
+	local prev = nil
+	while d and d ~= prev do
+		local p = d .. "/.env"
+		if vim.fn.filereadable(p) == 1 then
+			local vars = {}
+			for _, raw in ipairs(vim.fn.readfile(p)) do
+				local k, v = raw:match("^%s*([%w_]+)%s*=%s*(.-)%s*$")
+				if k and v ~= "" then
+					vars[k] = v:gsub("^['\"](.*)['\"]$", "%1")
+				end
+			end
+			return vars
+		end
+		prev = d
+		d = vim.fn.fnamemodify(d, ":h")
+	end
+	return {}
+end
+
+--- (internal) env vars from the `.env` file, if any.
+function M.dotenv_vars(dir)
+	return M.dotenv(dir)
 end
 
 --- Parse curl output (built with -i and a trailing write-out marker line).
@@ -308,12 +596,22 @@ end
 ---   anything else                                          -> --data-binary @-
 function M.curl_args(spec, curl_opts, marker)
 	curl_opts = curl_opts or {}
-	local timeout = tonumber((spec.opts or {}).timeout) or curl_opts.timeout or 30
+	local o = spec.opts or {}
+	local timeout = tonumber(o.timeout) or curl_opts.timeout or 30
 	local args = { "curl", "-sS", "-i", "-X", spec.method, "--max-time", tostring(timeout) }
-	if curl_opts.insecure then
+	if o.insecure or curl_opts.insecure then
 		vim.list_extend(args, { "-k" })
 	end
-	local follow = not (spec.opts and spec.opts.no_redirect)
+	if o.cert then
+		vim.list_extend(args, { "--cert", M.substitute(o.cert, spec.vars) })
+	end
+	if o.key then
+		vim.list_extend(args, { "--key", M.substitute(o.key, spec.vars) })
+	end
+	if o.proxy then
+		vim.list_extend(args, { "--proxy", M.substitute(o.proxy, spec.vars) })
+	end
+	local follow = not o.no_redirect
 	if follow and curl_opts.max_redirects and curl_opts.max_redirects > 0 then
 		vim.list_extend(args, { "-L", "--max-redirs", tostring(curl_opts.max_redirects) })
 	end
@@ -387,17 +685,186 @@ function M.curl_args(spec, curl_opts, marker)
 	return args
 end
 
---- Send a request via curl (async).
---- spec: { method, url, headers={k=v}, body=nil|string, vars={k=v} }
-function M.send(spec, curl_opts, cwd, cb)
+local function inject_auth(spec, token)
+	local headers = {}
+	for k, v in pairs(spec.headers or {}) do
+		headers[k] = v
+	end
+	headers.Authorization = "Bearer " .. token
+	spec.headers = headers
+	return spec
+end
+
+local function next_marker()
 	seq = seq + 1
-	local marker = "@@tuiter" .. seq .. "@@"
+	return "@@tuiter" .. seq .. "@@"
+end
+
+--- Follow `Link: <url>; rel="next"` headers (# @paginate), up to max_pages.
+--- JSON-array pages are concatenated into one array; anything else is joined
+--- with newlines. The final response carries paginated/page_count marks.
+local function paginate(spec, curl_opts, cwd, pages, max_pages, done)
+	local last = pages[#pages]
+	local next_url = nil
+	for hk, hv in last.headers:gmatch("([^:\r\n]+):%s*([^\r\n]*)") do
+		if hk:lower() == "link" then
+			next_url = hv:match("<([^>]+)>%s*;%s*rel=%s*[\"']next[\"']?") or next_url
+		end
+	end
+	if not next_url or #pages >= max_pages then
+		local first, bodies = pages[1], {}
+		local all_arrays = true
+		for _, p in ipairs(pages) do
+			bodies[#bodies + 1] = p.body
+			if p.body:match("^%s*%[") == nil then
+				all_arrays = false
+			end
+		end
+		local body
+		if all_arrays then
+			local out = {}
+			for _, p in ipairs(pages) do
+				local ok, arr = pcall(vim.json.decode, p.body)
+				if ok and type(arr) == "table" then
+					for _, v in ipairs(arr) do
+						out[#out + 1] = v
+					end
+				end
+			end
+			body = vim.json.encode(out)
+		else
+			body = table.concat(bodies, "\n")
+		end
+		local merged = vim.deepcopy(first)
+		merged.body = body
+		merged.paginated = true
+		merged.page_count = #pages
+		merged.time = 0
+		merged.size = 0
+		for _, p in ipairs(pages) do
+			merged.time = (merged.time or 0) + (p.time or 0)
+			merged.size = (merged.size or 0) + (p.size or 0)
+		end
+		done(merged)
+		return
+	end
+	local page_spec = vim.deepcopy(spec)
+	page_spec.url = M.substitute(next_url, spec.vars)
+	page_spec.method = "GET"
+	page_spec.body = nil
+	local marker = next_marker()
+	local proc
+	proc = vim.system(M.curl_args(page_spec, curl_opts, marker), { text = true, stdin = "" }, function(out)
+		M.state.procs[proc] = nil
+		pages[#pages + 1] = M.parse_response(out.stdout, out.stderr, out.code, marker, out.signal)
+		vim.schedule(function()
+			paginate(spec, curl_opts, cwd, pages, max_pages, done)
+		end)
+	end)
+	M.state.procs[proc] = true
+end
+
+local function do_send(spec, curl_opts, cwd, cb)
+	local marker = next_marker()
 	local args = M.curl_args(spec, curl_opts, marker)
 	local body = spec.body and M.substitute(spec.body, spec.vars) or nil
 	local proc
 	proc = vim.system(args, { text = true, stdin = body or "" }, function(out)
 		M.state.procs[proc] = nil
 		cb(M.parse_response(out.stdout, out.stderr, out.code, marker, out.signal))
+	end)
+	M.state.procs[proc] = true
+end
+
+--- Send a request via curl (async).
+--- spec: { method, url, headers={k=v}, body=nil|string, vars={k=v}, auth?, tests? }
+--- Handles OAuth2/bearer auth, # @test assertions (evaluated into
+--- resp.tests / resp.failures) and # @paginate pagination.
+function M.send(spec, curl_opts, cwd, cb)
+	local done = function(resp)
+		if resp then
+			M.eval_tests(spec.tests, resp)
+		end
+		cb(resp)
+	end
+	-- pagination path (# @paginate / # @max-pages)
+	local paginated = function()
+		local max_pages = tonumber((spec.opts or {}).max_pages) or 5
+		local marker = next_marker()
+		local proc
+		proc = vim.system(M.curl_args(spec, curl_opts, marker), { text = true, stdin = "" }, function(out)
+			M.state.procs[proc] = nil
+			local first = M.parse_response(out.stdout, out.stderr, out.code, marker, out.signal)
+			vim.schedule(function()
+				paginate(spec, curl_opts, cwd, { first }, max_pages, done)
+			end)
+		end)
+		M.state.procs[proc] = true
+	end
+	-- execute the request (respecting pagination), evaluating 401-refresh retry
+	local perform = function()
+		if spec.opts and spec.opts.paginate then
+			paginated()
+			return
+		end
+		do_send(spec, curl_opts, cwd, function(resp)
+			-- 401 + refresh flow: invalidate the cached token and retry once
+			if resp.status == 401 and spec.auth and spec.auth.type == "refresh" then
+				require("tuiter.auth").invalidate(spec.auth)
+				require("tuiter.auth").ensure_token(spec.auth, cwd, curl_opts, function(t2)
+					if t2 then
+						spec = inject_auth(spec, t2)
+						do_send(spec, curl_opts, cwd, done)
+					else
+						done(resp)
+					end
+				end)
+				return
+			end
+			done(resp)
+		end)
+	end
+	if spec.auth then
+		require("tuiter.auth").ensure_token(spec.auth, cwd, curl_opts, function(token)
+			if not token then
+				cb({ ok = false, status = 0, headers = "", body = "", error = "OAuth2 token fetch failed" })
+				return
+			end
+			spec = inject_auth(spec, token)
+			perform()
+		end)
+	else
+		perform()
+	end
+end
+
+--- Stream a response body as it arrives (# @stream): curl -N, chunks
+--- forwarded to on_chunk(data); on_done(code) fires when the process exits.
+function M.send_stream(spec, curl_opts, cwd, on_chunk, on_done)
+	local args = M.curl_args(spec, curl_opts, nil)
+	table.insert(args, 2, "-N") -- no buffering: stream chunks as they arrive
+	local body = spec.body and M.substitute(spec.body, spec.vars) or nil
+	local proc
+	proc = vim.system(args, {
+		text = true,
+		stdin = body or "",
+		stdout = function(_, data)
+			if data then
+				vim.schedule(function()
+					on_chunk(data)
+				end)
+			end
+		end,
+		stderr = function(_, data)
+			if data then
+				vim.schedule(function()
+					on_chunk(data)
+				end)
+			end
+		end,
+	}, function(out)
+		M.state.procs[proc] = nil
+		on_done(out.code)
 	end)
 	M.state.procs[proc] = true
 end

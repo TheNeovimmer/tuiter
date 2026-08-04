@@ -1,10 +1,11 @@
 --- Code snippet generation (Insomnia's "copy as …"): curl, python-requests,
---- javascript fetch, go net/http. All specs are var-substituted first.
+--- javascript/typescript fetch, go net/http, rust reqwest, php curl,
+--- graphql fetch. All specs are var-substituted first.
 local client = require("tuiter.client")
 
 local M = {}
 
----@param lang string "curl" | "python" | "js" | "go"
+---@param lang string "curl" | "python" | "js" | "ts" | "go" | "rust" | "php" | "graphql"
 function M.generate(lang, spec, curl_opts)
 	if lang == "curl" then
 		return client.curl_command(spec, curl_opts)
@@ -12,8 +13,16 @@ function M.generate(lang, spec, curl_opts)
 		return M.python(spec)
 	elseif lang == "js" then
 		return M.js(spec)
+	elseif lang == "ts" then
+		return M.ts(spec)
 	elseif lang == "go" then
 		return M.go(spec)
+	elseif lang == "rust" then
+		return M.rust(spec)
+	elseif lang == "php" then
+		return M.php(spec)
+	elseif lang == "graphql" then
+		return M.graphql(spec)
 	end
 	return nil
 end
@@ -80,10 +89,11 @@ function M.python(spec)
 	return table.concat(lines, "\n")
 end
 
-function M.js(spec)
+local function js_fetch(spec, typed)
 	local url, headers, body = prepare(spec)
 	local json_body = is_json_body(body)
-	local lines = { ("const url = %q;"):format(url), "const options = {" }
+	local decl = typed and "const url: string" or "const url"
+	local lines = { ("%s = %q;"):format(decl, url), "const options = {" }
 	lines[#lines + 1] = ("  method: %q,"):format(spec.method)
 	local hs = header_pairs(headers)
 	lines[#lines + 1] = "  headers: {"
@@ -105,6 +115,14 @@ function M.js(spec)
 	lines[#lines + 1] = ""
 	lines[#lines + 1] = "fetch(url, options).then(r => r.text()).then(console.log);"
 	return table.concat(lines, "\n")
+end
+
+function M.js(spec)
+	return js_fetch(spec, false)
+end
+
+function M.ts(spec)
+	return js_fetch(spec, true)
 end
 
 function M.go(spec)
@@ -140,6 +158,78 @@ function M.go(spec)
 	lines[#lines + 1] = "\tb, _ := io.ReadAll(resp.Body)"
 	lines[#lines + 1] = "\tfmt.Println(resp.StatusCode, string(b))"
 	lines[#lines + 1] = "}"
+	return table.concat(lines, "\n")
+end
+
+function M.rust(spec)
+	local url, headers, body = prepare(spec)
+	local lines = {
+		"use reqwest; // cargo add reqwest tokio --features tokio/full",
+		"",
+		"#[tokio::main]",
+		"async fn main() -> Result<(), Box<dyn std::error::Error>> {",
+		"\tlet client = reqwest::Client::new();",
+	}
+	lines[#lines + 1] = ("\tlet resp = client.%s(%q)"):format(spec.method:lower(), url)
+	for _, h in ipairs(header_pairs(headers)) do
+		lines[#lines + 1] = ("\t\t.header(%q, %q)"):format(h[1], h[2])
+	end
+	if body then
+		lines[#lines + 1] = ("\t\t.body(%q.to_string())"):format(body:gsub("%q", "\\%q"))
+	end
+	lines[#lines + 1] = "\t\t.send()"
+	lines[#lines + 1] = "\t\t.await?;"
+	lines[#lines + 1] = '\tprintln!("{} {}", resp.status(), resp.text().await?);'
+	lines[#lines + 1] = "\tOk(())"
+	lines[#lines + 1] = "}"
+	return table.concat(lines, "\n")
+end
+
+function M.php(spec)
+	local url, headers, body = prepare(spec)
+	local lines =
+		{ '$ch = curl_init("' .. url .. '");', 'curl_setopt($ch, CURLOPT_CUSTOMREQUEST, "' .. spec.method .. '");' }
+	if body then
+		lines[#lines + 1] = 'curl_setopt($ch, CURLOPT_POSTFIELDS, "' .. body:gsub('"', '\\"') .. '");'
+	end
+	local hdrs = {}
+	for _, h in ipairs(header_pairs(headers)) do
+		hdrs[#hdrs + 1] = '"' .. h[1] .. ": " .. h[2] .. '"'
+	end
+	lines[#lines + 1] = "curl_setopt($ch, CURLOPT_HTTPHEADER, array(" .. table.concat(hdrs, ", ") .. "));"
+	lines[#lines + 1] = "curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);"
+	lines[#lines + 1] = "$response = curl_exec($ch);"
+	lines[#lines + 1] = "$status = curl_getinfo($ch, CURLINFO_HTTP_CODE);"
+	lines[#lines + 1] = "curl_close($ch);"
+	lines[#lines + 1] = 'echo $status . " " . $response;'
+	return table.concat(lines, "\n")
+end
+
+--- For GraphQL operations: extract the query text from the JSON body
+--- tuiter sends, and emit a clean JS fetch with the operation separated.
+function M.graphql(spec)
+	local url, headers, body = prepare(spec)
+	local query, variables = nil, nil
+	if body then
+		local ok, data = pcall(vim.json.decode, body)
+		if ok and type(data) == "table" then
+			query = data.query
+			variables = data.variables
+		end
+	end
+	if not query then
+		return M.js(spec)
+	end
+	local lines = { ("const url = %q;"):format(url), ("const query = %q;"):format(query) }
+	if variables then
+		lines[#lines + 1] = ("const variables = %s;"):format(vim.json.encode(variables))
+	end
+	lines[#lines + 1] = "fetch(url, { method: 'POST', headers: " .. vim.json.encode(headers) .. ", body: JSON.stringify({"
+	lines[#lines + 1] = "  query,"
+	if variables then
+		lines[#lines + 1] = "  variables,"
+	end
+	lines[#lines + 1] = "}) }).then(r => r.text()).then(console.log);"
 	return table.concat(lines, "\n")
 end
 

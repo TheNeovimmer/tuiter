@@ -354,3 +354,192 @@ if saved then
 else
 	os.remove(hfile)
 end
+
+-- =====================================================================
+-- New features (pro): named chaining, assertions, import, codegen, auth,
+-- directives, dotenv, redaction
+-- =====================================================================
+
+-- --- named response chaining ({{name.body.path}}, {{name.status}}) ---
+client.state.responses = {}
+client.record_response(
+	{ body = '{"token":"L-T","n":1}', status = 200, headers = "", ok = true },
+	{ name = "login", url = "http://x/login" }
+)
+eq(client.substitute("{{login.body.token}}", {}), "L-T", "named body.chaining")
+eq(client.substitute("{{login.status}}", {}), "200", "named status")
+eq(client.substitute("{{login.body}}", {}), '{"token":"L-T","n":1}', "named raw body")
+eq(client.substitute("{{login.body.missing}}", {}), "{{login.body.missing}}", "named missing kept")
+eq(client.substitute("{{unknown.body.x}}", {}), "{{unknown.body.x}}", "unknown name kept")
+
+-- --- assertions (# @test) ---
+local ar = {
+	status = 200,
+	headers = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n",
+	body = '{"token":"abc","items":[1,2,3],"error":null}',
+	ok = true,
+	time = 0.12,
+	size = 10,
+}
+eq(client.eval_test("status == 200", ar).pass, true, "t status ==")
+eq(client.eval_test("status < 300", ar).pass, true, "t status <")
+eq(client.eval_test("status >= 201", ar).pass, false, "t status >=")
+eq(client.eval_test("body.token exists", ar).pass, true, "t body exists")
+eq(client.eval_test("body.error == null", ar).pass, true, "t body null")
+eq(client.eval_test("body.error exists", ar).pass, false, "t body null exists false")
+eq(client.eval_test("body.items.length > 2", ar).pass, true, "t body length >")
+eq(client.eval_test("body.items contains 3", ar).pass, true, "t body contains int")
+eq(client.eval_test('headers.content-type contains "json"', ar).pass, true, "t header contains")
+eq(client.eval_test("responseTime < 500", ar).pass, true, "t responseTime <")
+eq(client.eval_test("missiong == 1", ar) == nil, true, "t unparseable lhs nil")
+local ev = client.eval_tests({ "status == 200", "body.nope == 1" }, ar)
+eq(#ev, 2, "t eval count")
+eq(ev[1].pass, true, "t eval pass")
+eq(ev[2].pass, false, "t eval fail")
+eq(#ar.tests, 2, "t resp.tests set")
+eq(ar.failures, 1, "t resp.failures")
+
+-- --- parser: tests array, auth directive, body_line ---
+local pr = parser.parse_lines({
+	"### A",
+	"# @test status == 201",
+	"# @test body.id exists",
+	"# @auth oauth2 token_url=http://x/token client_id=cid client_secret=cs scope=api",
+	"POST http://x/",
+	"Content-Type: application/json",
+	"",
+	'{"a":1}',
+})
+eq(#pr[1].tests, 2, "parser tests array")
+eq(pr[1].auth.type, "oauth2", "parser auth type")
+eq(pr[1].auth.client_id, "cid", "parser auth client_id")
+eq(pr[1].auth.token_url, "http://x/token", "parser auth token_url")
+eq(pr[1].body, '{"a":1}', "parser body")
+eq(pr[1].body_line, 8, "parser body_line (first content line)")
+local be = parser.parse_lines({ "### A", "# @auth bearer TOK1", "GET http://x/" })
+eq(be[1].auth.type, "bearer", "parser bearer auth")
+eq(be[1].auth.token, "TOK1", "parser bearer token")
+
+-- --- curl directives (cert/key/proxy/insecure) ---
+local dc = client.curl_args({
+	method = "GET",
+	url = "http://x/",
+	headers = {},
+	body = nil,
+	vars = {},
+	opts = { cert = "cert.pem", key = "key.pem", proxy = "http://proxy:8080", insecure = true },
+	cwd = nil,
+}, { cookie_jar = false, insecure = false })
+eq(vim.tbl_contains(dc, "--cert") and vim.tbl_contains(dc, "cert.pem"), true, "cert directive")
+eq(vim.tbl_contains(dc, "--key") and vim.tbl_contains(dc, "key.pem"), true, "key directive")
+eq(vim.tbl_contains(dc, "--proxy") and vim.tbl_contains(dc, "http://proxy:8080"), true, "proxy directive")
+eq(vim.tbl_contains(dc, "-k"), true, "per-request insecure")
+
+-- --- codegen expansion ---
+local cgspec = {
+	method = "POST",
+	url = "http://x.test/",
+	headers = { ["Content-Type"] = "application/json", Authorization = "Bearer abc" },
+	body = '{"a":1}',
+	vars = {},
+}
+eq(cg.generate("ts", cgspec, {}):match("const url: string") ~= nil, true, "ts typed url")
+eq(cg.generate("ts", cgspec, {}):match("JSON.stringify") ~= nil, true, "ts json body")
+eq(cg.generate("rust", cgspec, {}):match("reqwest::Client::new()") ~= nil, true, "rust reqwest")
+eq(cg.generate("php", cgspec, {}):match("curl_exec") ~= nil, true, "php curl")
+local gq = cg.generate(
+	"graphql",
+	{ method = "POST", url = "http://x/g", headers = {}, vars = {}, body = '{"query":"query Q { x }","variables":null}' },
+	{}
+)
+eq(gq:match('"query Q { x }"') ~= nil, true, "graphql codegen query")
+eq(cg.generate("curl", cgspec, {}):match("http://x%.test/") ~= nil, true, "curl still works")
+
+-- --- import: postman + openapi ---
+local imp = require("tuiter.import")
+local pm, pmerr = imp.postman(vim.json.encode({
+	info = { name = "demo" },
+	item = {
+		{ name = "get users", request = { method = "GET", url = "https://api.x/users" } },
+		{
+			name = "create",
+			item = {
+				{
+					name = "post",
+					request = {
+						method = "POST",
+						url = "https://api.x/users",
+						header = { { key = "Content-Type", value = "application/json" } },
+						body = { mode = "raw", raw = '{"a":1}' },
+					},
+				},
+			},
+		},
+	},
+}))
+eq(pmerr == nil, true, "postman parse")
+eq(pm:match("### get users") ~= nil, true, "postman name")
+eq(pm:match("GET https://api%.x/users") ~= nil, true, "postman method+url")
+eq(pm:match("POST https://api%.x/users") ~= nil, true, "postman nested item")
+eq(pm:match('{"a":1}') ~= nil, true, "postman raw body")
+local oa, oaerr = imp.openapi(vim.json.encode({
+	openapi = "3.0.3",
+	servers = { { url = "https://api.x/v1" } },
+	paths = {
+		["/users/{id}"] = {
+			get = {
+				operationId = "getUser",
+				parameters = {
+					{ name = "id", ["in"] = "path" },
+					{ name = "verbose", ["in"] = "query", schema = { example = "true" } },
+				},
+			},
+			post = {
+				operationId = "createUser",
+				requestBody = { content = { ["application/json"] = { example = { name = "ada" } } } },
+			},
+		},
+	},
+}))
+eq(oaerr == nil, true, "openapi parse")
+eq(oa:find("GET https://api.x/v1/users/:param?verbose=true", 1, true) ~= nil, true, "openapi get+query")
+eq(oa:match("POST https://api%.x/v1/users/:param") ~= nil, true, "openapi post")
+eq(oa:find('{"name":"ada"}', 1, true) ~= nil, true, "openapi example body")
+
+-- --- history redaction ---
+local h2 = require("tuiter.history")
+local _saved2 = vim.fn.filereadable(hfile) == 1 and vim.fn.readfile(hfile) or nil
+vim.fn.writefile({ "[]" }, hfile)
+h2.add({
+	method = "GET",
+	url = "http://x/",
+	name = "",
+	headers = { Authorization = "Bearer SECRET", ["X-Keep"] = "v", Cookie = "sid=1" },
+	body = nil,
+	vars = {},
+	cwd = ".",
+}, { status = 200, time = 0, size = 1 })
+local stored = h2.load()[1].spec.headers
+eq(stored.Authorization == nil, true, "redact authorization")
+eq(stored.Cookie == nil, true, "redact cookie")
+eq(stored["X-Keep"], "v", "keep other headers")
+if _saved2 then
+	vim.fn.writefile(_saved2, hfile)
+else
+	os.remove(hfile)
+end
+
+-- --- dotenv ---
+local dtmp = vim.fn.tempname() .. "/"
+vim.fn.mkdir(dtmp, "p")
+vim.fn.writefile({ "DB_HOST=localhost", 'GREET="hi there"', "QUOTED='x'" }, dtmp .. ".env")
+local dv = client.dotenv(dtmp)
+eq(dv.DB_HOST, "localhost", "dotenv var")
+eq(dv.GREET, "hi there", "dotenv strip quotes")
+
+if failed == 0 then
+	print("ALL UNIT TESTS PASSED (incl. features)")
+else
+	print(failed .. " FAILURES")
+	os.exit(1)
+end

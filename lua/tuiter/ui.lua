@@ -10,6 +10,8 @@ local M = {
 		help_win = nil,
 		summary_win = nil,
 		last = nil, -- { resp, spec, opts } of the last shown response
+		prev = nil, -- { resp, spec } of the previously shown response
+		aux_win = nil,
 		tab = 1, -- 1=body 2=headers 3=timeline
 		pretty = true, -- pretty vs raw JSON body
 		display = nil, -- { raw, pretty, json } of the shown body
@@ -221,7 +223,7 @@ local function open_floats(tab_buf, body_buf, body_title)
 	return head_win, body_win
 end
 
-local TAB_NAMES = { "Body", "Headers", "Timeline" }
+local TAB_NAMES = { "Body", "Headers", "Timeline", "Tests" }
 
 local function render_tabs()
 	local resp, spec = M.state.last.resp, M.state.last.spec
@@ -343,7 +345,7 @@ local function render_content()
 				vim.api.nvim_buf_add_highlight(buf, -1, "TuiterHeaderKey", i - 1, 0, #key)
 			end
 		end
-	else
+	elseif M.state.tab == 3 then
 		local tlines = M.timeline_lines(resp)
 		vim.api.nvim_buf_set_lines(buf, 0, -1, false, tlines)
 		vim.bo[buf].filetype = "text"
@@ -351,8 +353,40 @@ local function render_content()
 		for i, tl in ipairs(tlines) do
 			vim.api.nvim_buf_add_highlight(buf, -1, "Comment", i - 1, 22, -1)
 		end
+	else
+		-- Tests tab: render # @test assertions
+		local tlines, n = {}, 0
+		local tests = resp.tests or {}
+		if #tests == 0 then
+			tlines[1] = "(no # @test assertions)"
+		else
+			for _, te in ipairs(tests) do
+				n = n + 1
+				local icon = te.pass and "✓" or "✗"
+				tlines[n] = icon .. " " .. (te.expr or "")
+				if te.actual ~= nil then
+					tlines[n] = tlines[n] .. "   · got: " .. trunc(fmt_actual(te.actual), 60)
+				elseif te.error then
+					tlines[n] = tlines[n] .. "   · " .. te.error
+				end
+			end
+		end
+		vim.api.nvim_buf_set_lines(buf, 0, -1, false, tlines)
+		vim.bo[buf].filetype = "text"
+		vim.wo[M.state.body_win].foldmethod = "manual"
+		for i, te in ipairs(tests) do
+			vim.api.nvim_buf_add_highlight(buf, -1, te.pass and "TuiterOk" or "TuiterError", i - 1, 0, -1)
+		end
 	end
 	vim.bo[buf].modifiable = false
+end
+
+local function fmt_actual(v)
+	if type(v) == "table" then
+		v = vim.json.encode(v)
+	end
+	-- flatten multi-line bodies (e.g. failed `contains`) for the one-line summary
+	return tostring(v):gsub("[\r\n]+", " ")
 end
 
 local function set_statusline(win, resp, spec)
@@ -376,6 +410,7 @@ end
 --- Show a response. opts: { resend = fn, copy_curl = fn }
 function M.show(resp, spec, opts)
 	opts = opts or {}
+	M.state.prev = M.state.last -- save for diff-vs-previous
 	M.state.last = { resp = resp, spec = spec, opts = opts }
 	M.mark(spec.url, resp.status)
 	M.close()
@@ -403,6 +438,9 @@ function M.show(resp, spec, opts)
 			M.set_tab(3)
 		end, "Timeline tab")
 	end
+	buf_map(body_buf, "4", function()
+		M.set_tab(4)
+	end, "Tests tab")
 	buf_map(body_buf, "p", M.toggle_pretty, "Toggle pretty/raw body")
 	buf_map(body_buf, "y", M.yank_body, "Copy current tab")
 	buf_map(body_buf, "f", M.save_body, "Save body to file")
@@ -417,12 +455,21 @@ function M.show(resp, spec, opts)
 		if opts.copy_code then
 			opts.copy_code()
 		end
-	end, "Copy as code snippet (python/js/go)")
+	end, "Copy as code snippet")
 	buf_map(body_buf, "r", function()
 		if opts.resend then
 			opts.resend()
 		end
 	end, "Resend request")
+	buf_map(body_buf, "D", M.diff_prev, "Diff against previous response")
+	buf_map(body_buf, "J", M.jq_filter, "Filter body through jq")
+	buf_map(body_buf, "o", M.open_in_tab, "Open response in a new tab")
+	buf_map(body_buf, "]k", function()
+		M.jump_key(1)
+	end, "Next JSON key")
+	buf_map(body_buf, "[k", function()
+		M.jump_key(-1)
+	end, "Previous JSON key")
 
 	vim.wo[body_win].wrap = true
 	set_statusline(body_win, resp, spec)
@@ -498,6 +545,231 @@ end
 
 function M.mark(url, status)
 	M.state.results[url] = status
+end
+
+-- ---------------------------------------------------------------------------
+-- Response helpers: diff-vs-previous, jq filter, open-in-tab, JSON navigation
+-- ---------------------------------------------------------------------------
+
+local function close_aux()
+	if is_valid(M.state.aux_win) then
+		pcall(vim.api.nvim_win_close, M.state.aux_win, true)
+	end
+	M.state.aux_win = nil
+end
+
+local function open_aux(title, lines, hl_line)
+	close_aux()
+	local buf = mk_buf()
+	vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+	vim.bo[buf].modifiable = false
+	local cols, rows = vim.o.columns, vim.o.lines
+	local width = math.min(100, cols - 6)
+	local height = math.min(#lines + 2, rows - 4)
+	local win = vim.api.nvim_open_win(buf, true, {
+		relative = "editor",
+		width = width,
+		height = height,
+		row = math.max(2, math.floor((rows - height) / 2)),
+		col = math.floor((cols - width) / 2),
+		border = "rounded",
+		style = "minimal",
+		title = " " .. title .. " ",
+		title_pos = "center",
+	})
+	buf_map(buf, "q", close_aux, "Close")
+	for i, line in ipairs(lines) do
+		if hl_line then
+			local hl = hl_line(line)
+			if hl then
+				vim.api.nvim_buf_add_highlight(buf, -1, hl, i - 1, 0, -1)
+			end
+		end
+	end
+	M.state.aux_win = win
+end
+
+local function pretty_or_raw(body)
+	local p = client.pretty_json(body)
+	return (p or body or "") .. "\n"
+end
+
+--- Diff the current response body against the previously shown response.
+---`D` in the response window.
+function M.diff_prev()
+	local cur, prev = M.state.last, M.state.prev
+	if not cur or not prev then
+		vim.notify("Tuiter: no previous response to diff against", vim.log.levels.INFO, { title = "Tuiter" })
+		return
+	end
+	local a, b = pretty_or_raw(prev.resp.body), pretty_or_raw(cur.resp.body)
+	local ok, diff = pcall(vim.diff, a, b)
+	if not ok or not diff then
+		vim.notify("Tuiter: could not diff bodies", vim.log.levels.WARN, { title = "Tuiter" })
+		return
+	end
+	local lines = vim.split(diff, "\n", { plain = true })
+	for i = #lines, 1, -1 do
+		if lines[i] == "" then
+			table.remove(lines, i)
+		end
+	end
+	open_aux("diff — previous vs current (“" .. trunc(prev.spec.url, 30) .. "”)", lines, function(line)
+		if line:sub(1, 1) == "-" and line:sub(1, 3) ~= "---" then
+			return "diffDeleted"
+		elseif line:sub(1, 1) == "+" and line:sub(1, 3) ~= "+++" then
+			return "diffAdded"
+		end
+		return nil
+	end)
+end
+
+--- Pipe the current response body through jq (`J`). Requires jq on PATH.
+function M.jq_filter()
+	local last = M.state.last
+	if not last then
+		return
+	end
+	if vim.fn.executable("jq") == 0 then
+		vim.notify("Tuiter: jq not found on PATH", vim.log.levels.WARN, { title = "Tuiter" })
+		return
+	end
+	vim.ui.input({ prompt = "jq filter (body is piped to jq):", default = "." }, function(expr)
+		if not expr or expr == "" then
+			return
+		end
+		local out = vim.fn.systemlist({ "jq", "-r", expr }, last.resp.body)
+		open_aux("jq: " .. trunc(expr, 40), out)
+		vim.notify("Tuiter: jq filter applied", vim.log.levels.INFO, { title = "Tuiter" })
+	end)
+end
+
+--- Open the current response tab's content in a new tab (editable buffer).
+function M.open_in_tab()
+	local last = M.state.last
+	if not last or not is_valid(M.state.body_win) then
+		return
+	end
+	local text = table.concat(vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(M.state.body_win), 0, -1, false), "\n")
+	local buf = vim.api.nvim_create_buf(false, false)
+	vim.api.nvim_buf_set_name(buf, "tuiter-response-" .. os.date("%H%M%S"))
+	vim.api.nvim_buf_set_lines(buf, 0, -1, false, vim.split(text, "\n"))
+	local ft = M.state.display and M.state.display.json and "json" or body_filetype(last.resp)
+	if ft then
+		vim.bo[buf].filetype = ft
+	end
+	vim.api.nvim_set_current_tabpage(vim.api.nvim_create_tabpage())
+	vim.api.nvim_set_current_buf(buf)
+end
+
+--- Jump to the next/previous top-level JSON key in the pretty body tab.
+function M.jump_key(dir)
+	local body_win = M.state.body_win
+	if not is_valid(body_win) or M.state.tab ~= 1 or not M.state.display or not M.state.display.json then
+		return
+	end
+	local buf = vim.api.nvim_win_get_buf(body_win)
+	local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+	local keys = {}
+	for i, line in ipairs(lines) do
+		if line:match('^%s%s"') or line:match("^%s%s%d:") then
+			keys[#keys + 1] = i
+		end
+	end
+	if #keys == 0 then
+		return
+	end
+	local cur = vim.api.nvim_win_get_cursor(body_win)[1]
+	local next_key
+	for _, k in ipairs(keys) do
+		if (dir > 0 and k > cur) or (dir < 0 and k < cur) then
+			next_key = k
+			break
+		end
+	end
+	if not next_key then
+		next_key = dir > 0 and keys[1] or keys[#keys]
+	end
+	vim.api.nvim_win_set_cursor(body_win, { next_key, 0 })
+end
+
+-- ---------------------------------------------------------------------------
+-- Streaming response (SSE / `# @stream`)
+-- ---------------------------------------------------------------------------
+
+local stream_win = nil -- held here to avoid clashing with the response floats
+
+--- Open a streaming view for a request; chunks are appended via stream_chunk.
+function M.open_stream(spec)
+	if is_valid(stream_win) then
+		pcall(vim.api.nvim_win_close, stream_win, true)
+	end
+	local buf = mk_buf()
+	vim.bo[buf].filetype = "text"
+	vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "streaming: " .. spec.method .. " " .. spec.url .. "…" })
+	vim.bo[buf].modifiable = false
+	local cols, rows = vim.o.columns, vim.o.lines
+	local width = math.min(100, cols - 6)
+	local win = vim.api.nvim_open_win(buf, true, {
+		relative = "editor",
+		width = width,
+		height = math.min(rows - 6, 40),
+		row = 2,
+		col = math.max(2, (cols - width) / 2),
+		border = "rounded",
+		style = "minimal",
+		title = " streaming — " .. trunc(spec.url, 30) .. " ",
+		title_pos = "center",
+	})
+	buf_map(buf, "q", function()
+		pcall(vim.api.nvim_win_close, win, true)
+		stream_win = nil
+	end, "Close stream")
+	stream_win = win
+end
+
+--- Append a chunk to the streaming view (also cancelled via M.state cancel).
+function M.stream_chunk(data)
+	if not is_valid(stream_win) then
+		return
+	end
+	local buf = vim.api.nvim_win_get_buf(stream_win)
+	local lines = vim.split(data, "\n", { plain = true })
+	-- keep a trailing empty line if data ends in newline
+	if data:sub(-1) == "\n" then
+		lines[#lines + 1] = ""
+	end
+	vim.bo[buf].modifiable = true
+	local cur = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+	local tail = cur[#cur]
+	if #lines > 0 and tail and tail ~= "" and lines[1] ~= "" then
+		cur[#cur] = tail .. lines[1]
+		table.remove(lines, 1)
+	end
+	local final = {}
+	for i, l in ipairs(cur) do
+		final[i] = l
+	end
+	for _, l in ipairs(lines) do
+		final[#final + 1] = l
+	end
+	vim.api.nvim_buf_set_lines(buf, 0, -1, false, final)
+	vim.bo[buf].modifiable = false
+	vim.api.nvim_win_set_cursor(stream_win, { math.max(1, #final - 1), 0 })
+end
+
+--- Mark the stream as finished.
+function M.stream_end(code)
+	if not is_valid(stream_win) then
+		return
+	end
+	local buf = vim.api.nvim_win_get_buf(stream_win)
+	vim.bo[buf].modifiable = true
+	local final = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+	final[#final + 1] = ""
+	final[#final + 1] = "── end of stream (exit code " .. tostring(code) .. ") ──"
+	vim.api.nvim_buf_set_lines(buf, 0, -1, false, final)
+	vim.bo[buf].modifiable = false
 end
 
 function M.toggle()
@@ -721,19 +993,36 @@ function M.show_run_summary(results, opts)
 	local lines = {}
 	for i, entry in ipairs(results) do
 		local resp = entry.resp
-		local ok = resp.ok and resp.status < 400
+		local failed = (resp.failures or 0) > 0
+		local ok = (resp.ok and resp.status < 400) and not failed
 		local icon = ok and "✓" or "✗"
+		local tag = failed and " (tests failed)" or ""
 		local status = string.format(
-			"%s %-3s %-6s %-24s · %dms · %s",
+			"%s %-3s %-6s %-24s · %dms · %s%s",
 			icon,
 			resp.status,
 			entry.spec.method,
 			trunc(entry.spec.name ~= "" and entry.spec.name or entry.spec.url, 24),
 			(resp.time or 0) * 1000,
-			fmt_size(resp.size)
+			fmt_size(resp.size),
+			tag
 		)
 		lines[#lines + 1] = status
-		vim.api.nvim_buf_add_highlight(buf, -1, ok and "TuiterOk" or "TuiterError", i - 1, 0, -1)
+		local hl = ok and "TuiterOk" or "TuiterError"
+		local line_no = #lines
+		vim.api.nvim_buf_add_highlight(buf, -1, hl, line_no - 1, 0, -1)
+		-- indent failed assertions under their request
+		if resp.tests and #resp.tests > 0 then
+			for _, te in ipairs(resp.tests) do
+				local mark = te.pass and "✓" or "✗"
+				local l = "    " .. mark .. " " .. te.expr
+				if te.actual ~= nil then
+					l = l .. "  · got: " .. trunc(fmt_actual(te.actual), 50)
+				end
+				lines[#lines + 1] = l
+				vim.api.nvim_buf_add_highlight(buf, -1, te.pass and "Comment" or "TuiterError", #lines - 1, 0, -1)
+			end
+		end
 	end
 	if #lines == 0 then
 		lines = { "(no results)" }

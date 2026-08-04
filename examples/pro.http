@@ -1,0 +1,39 @@
+# Pro-feature examples: chaining, assertions, auth, streaming, pagination.
+# Requires the local test server: python3 tests/server.py
+
+### Login — named response used by later requests
+# @name login
+POST http://127.0.0.1:8999/token
+Content-Type: application/json
+
+{"user": "ada"}
+
+### Use the LOGIN response (named chaining) + assertions
+# @test status == 200
+# @test body.headers.Authorization contains "Bearer"
+GET http://127.0.0.1:8999/echo-headers
+Authorization: Bearer {{login.body.access_token}}
+
+### Bearer auth from a static token
+# @auth bearer tok-abc
+# @test body.headers.Authorization contains "Bearer"
+GET http://127.0.0.1:8999/echo-headers
+
+### OAuth2 client credentials — token fetched automatically
+# @auth oauth2 token_url=http://127.0.0.1:8999/token client_id=ci client_secret=cs scope=api
+# @test body.headers.Authorization == "Bearer oauth_token_123"
+GET http://127.0.0.1:8999/echo-headers
+
+### Pagination — follows rel="next" Link headers, concatenates pages
+# @paginate
+# @max-pages 3
+# @test status == 200
+GET http://127.0.0.1:8999/pages?n=0
+
+### Streaming (SSE) — :TuiterStream (or uncomment @stream and <leader>is)
+# @stream
+# @test body contains "n:0"
+GET http://127.0.0.1:8999/sse
+
+# Run all of these with <leader>ia; the summary shows ✓/✗ per test.
+# Export results: :TuiterJUnit  — CI: nvim --headless -c 'edit examples/pro.http' -c TuiterCI

@@ -25,9 +25,9 @@ vim.api.nvim_create_user_command("TuiterCopyAs", function(a)
 end, {
 	nargs = "?",
 	complete = function()
-		return { "curl", "python", "js", "go" }
+		return { "curl", "python", "js", "ts", "go", "rust", "php", "graphql" }
 	end,
-	desc = "Copy the request under the cursor as a code snippet (curl/python/js/go)",
+	desc = "Copy the request under the cursor as a code snippet",
 })
 
 vim.api.nvim_create_user_command("TuiterSaveBody", function()
@@ -45,3 +45,49 @@ end, { desc = "Toggle the tuiter response window" })
 vim.api.nvim_create_user_command("TuiterEnv", function()
 	require("tuiter").select_env()
 end, { desc = "Select a tuiter environment" })
+
+vim.api.nvim_create_user_command("TuiterStream", function()
+	require("tuiter").stream()
+end, { desc = "Stream the request under the cursor (SSE)" })
+
+vim.api.nvim_create_user_command("TuiterWatch", function(a)
+	require("tuiter").watch({ seconds = tonumber(a.args) })
+end, {
+	nargs = "?",
+	desc = "Re-run the request under the cursor every N seconds (toggle to stop)",
+})
+
+vim.api.nvim_create_user_command("TuiterJUnit", function(a)
+	require("tuiter").junit(a.args ~= "" and a.args or nil)
+end, {
+	nargs = "?",
+	desc = "Export the last run-all results as JUnit XML (TuiterJUnit [path])",
+})
+
+vim.api.nvim_create_user_command("TuiterCI", function()
+	require("tuiter").ci()
+end, { desc = "Run all requests and exit non-zero on failure (CI); writes tuiter-junit.xml" })
+
+vim.api.nvim_create_user_command("TuiterScaffold", function()
+	require("tuiter").scaffold()
+end, { desc = "Open a scaffolded .http buffer" })
+
+vim.api.nvim_create_user_command("TuiterFormat", function()
+	require("tuiter").format()
+end, { desc = "Pretty-print the JSON body of the request under the cursor" })
+
+vim.api.nvim_create_user_command("TuiterImportPostman", function(a)
+	require("tuiter").import("postman", a.args ~= "" and a.args or nil)
+end, {
+	nargs = "?",
+	complete = "file",
+	desc = "Convert a Postman collection JSON to a .http buffer",
+})
+
+vim.api.nvim_create_user_command("TuiterImportOpenapi", function(a)
+	require("tuiter").import("openapi", a.args ~= "" and a.args or nil)
+end, {
+	nargs = "?",
+	complete = "file",
+	desc = "Convert an OpenAPI spec JSON to a .http buffer",
+})

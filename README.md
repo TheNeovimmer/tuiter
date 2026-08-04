@@ -17,7 +17,19 @@ Insomnia/Postman for your editor, written in pure Lua.
 - **Timeline tab** — per-phase timing breakdown (DNS, TCP, TLS, TTFB, download) from curl
 - **Status bar** — HTTP code · time · size · env, green/red, in every response window
 - **Dynamic variables** — `{{$timestamp}}`, `{{$uuid}}`, `{{$randomInt}}`, … and response chaining via `{{$body.path.to.field}}`
-- **Copy as curl / code snippets** — Insomnia-style shell-safe curl command, plus `:TuiterCopyAs python|js|go` for real code
+- **Named request chaining** — reference any earlier request by name: `{{login.body.token}}`, `{{login.status}}`
+- **Assertions / tests** — `# @test status == 200` per request, checked in the run summary + exported to JUnit JSON
+- **OAuth2 + bearer auth** — `# @auth bearer TOKEN`, `# @auth oauth2 client_credentials` and `refresh` flows with token caching
+- **Streaming (SSE)** — `# @stream` pipes curl -N chunks into a live float
+- **Pagination** — `# @paginate` follows `rel="next"` Link headers and concatenates array pages
+- **Copy as curl / code snippets** — shell-safe curl plus `:TuiterCopyAs python|js|ts|go|rust|php|graphql`
+- **Import** — convert Postman collections and OpenAPI specs to `.http` via `:TuiterImportPostman` / `:TuiterImportOpenapi`
+- **`.env` support** — `.env` vars are layered under the selected JSON environment
+- **Requester tooling** — `:TuiterWatch` healthcheck, `:TuiterCI` headless run-all with exit code + JUnit, `:TuiterJUnit`, `:TuiterFormat`, `:TuiterScaffold`
+- **Response tooling** — diff against previous (`D`), jq filter (`J`), open in a tab (`o`), JSON key navigation (`]k`/`[k`), and a Tests tab (`4`)
+- **Picker integration** — Telescope extension (`history` / `requests` / `env`) plus `vim.ui.select` (LazyVim → snacks picker)
+- **Per-request curl directives** — `# @cert`, `# @key`, `# @proxy`, `# @insecure`
+- **Secret redaction** — Authorization / Cookie / API-key header values are never written to history
 - **GraphQL files** — `.graphql`/`.gql` buffers: each operation becomes a POST with `{"query", "variables"}` from `# @url` / `# @variables`
 - **Form bodies** — `multipart/form-data` (`-F`) and `application/x-www-form-urlencoded` (`--data-urlencode`) are sent as proper fields
 - **Cookie jar** — per-project persisted cookies (`-c`/`-b`), so login → follow-up requests just work
@@ -40,7 +52,7 @@ Insomnia/Postman for your editor, written in pure Lua.
   "TheNeovimmer/tuiter",
   branch = "main",
   dependencies = {}, -- zero plugin dependencies: pure Lua + curl only
-  cmd = { "Tuiter", "TuiterRun", "TuiterRunAll", "TuiterSaveBody", "TuiterHistory", "TuiterEnv", "TuiterResponse", "TuiterCopyAs" },
+  cmd = { "Tuiter", "TuiterRun", "TuiterRunAll", "TuiterCancel", "TuiterSaveBody", "TuiterHistory", "TuiterEnv", "TuiterResponse", "TuiterCopyAs", "TuiterStream", "TuiterWatch", "TuiterJUnit", "TuiterCI", "TuiterScaffold", "TuiterFormat", "TuiterImportPostman", "TuiterImportOpenapi" },
   ft = { "http", "graphql" },
   opts = {},
 }
@@ -153,15 +165,20 @@ HTTP status · time · size on the right.
 
 | Key | Action |
 |---|---|
-| `1` / `2` / `3` | Body / Headers / Timeline tab |
+| `1` / `2` / `3` / `4` | Body / Headers / Timeline / Tests tab |
 | `t` | Cycle tabs |
 | `q` | Close response |
 | `p` | Toggle pretty / raw JSON body |
-| `y` | Copy current tab (body, headers, or timeline) |
+| `y` | Copy current tab (body, headers, timeline, or tests) |
 | `c` | Copy as curl command (Insomnia-style) |
+| `C` | Copy as code snippet (picker) |
 | `f` | Save body to a file (`:TuiterSaveBody`) |
 | `z` | Zoom: response fills the screen (tab bar hidden) |
 | `r` | Resend the request |
+| `D` | Diff against the previous response |
+| `J` | Filter the body through `jq` (requires jq on PATH) |
+| `o` | Open the current tab in an editable new tab |
+| `]k` / `[k` | Jump to next / previous JSON key (Body tab) |
 | `?` | Keymap help |
 
 - **Body tab**: JSON is pretty-printed, treesitter-highlighted and
@@ -206,6 +223,116 @@ Authorization: Bearer {{$body.token}}
 > the collection runner also records each response, so later requests can
 > chain off earlier ones.
 
+### Named request chaining
+
+Any request with a name (`# @name login` or a `###` heading) can be referenced
+from later requests — not just the last one:
+
+```http
+### Login
+# @name login
+POST https://api.example.com/login
+Content-Type: application/json
+
+{"user": "ada"}
+
+### Use the token from the LOGIN response (not the last response)
+GET https://api.example.com/me
+Authorization: Bearer {{login.body.token}}
+```
+
+Supported: `{{name.body}}`, `{{name.status}}`, `{{name.body.path.to.field}}`
+(0-based array indexes).
+
+### Assertions (`# @test`)
+
+Write tests next to a request; they run on every send and are checked in the
+run-all summary, the response window's **Tests tab** (`4`), and JUnit exports:
+
+```http
+### Create user
+# @test status == 201
+# @test body.id exists
+# @test body.email contains "@"
+# @test responseTime < 500
+POST https://api.example.com/users
+Content-Type: application/json
+
+{"email": "ada@example.com"}
+```
+
+Supported: `status`, `responseTime` (ms), `size`, `body`, `body.path.to.field`
+(with `body.items.length`), `headers.<name>`. Operators: `== != > >= < <=`,
+`contains`, `matches`, `exists`, `missing`. RHS: numbers, quoted strings,
+`true`/`false`/`null`.
+
+`<leader>ia` shows ✓/✗ per assertion. `:TuiterJUnit [path]` exports the last
+run as JUnit XML (default `tuiter-junit.xml`); `:TuiterCI` runs all requests
+headlessly and exits non-zero on failure for CI pipelines:
+
+```sh
+nvim --headless -c 'edit api.http' -c TuiterCI
+```
+
+### OAuth2 & bearer auth
+
+```http
+### Static token
+# @auth bearer eyJhbGciOi...
+GET https://api.example.com/me
+
+### Client credentials
+# @auth oauth2 token_url=https://auth.example.com/token client_id=abc client_secret=def scope=api.read
+GET https://api.example.com/private
+
+### Refresh token (auto-refetches after 401)
+# @auth refresh token_url=https://auth.example.com/token client_id=abc client_secret=def refresh_token=rt1
+GET https://api.example.com/private
+```
+
+Tokens are cached (with expiry) in `stdpath("data")/tuiter/oauth.json`; the
+`refresh` flow invalidates and re-fetches once when a request comes back 401.
+
+### Streaming (SSE), pagination & per-request curl
+
+```http
+### Stream events as they arrive
+# @stream
+GET https://api.example.com/events
+
+### Follow rel="next" Link headers (concatenates JSON-array pages)
+# @paginate
+# @max-pages 10
+GET https://api.example.com/items?page=1
+```
+
+`# @stream` pipes `curl -N` output into a live float (`:TuiterStream`).
+Other per-request directives: `# @timeout 5`, `# @no-redirect`, `# @no-log`,
+`# @cert path`, `# @key path`, `# @proxy url`, `# @insecure`.
+
+### Import (Postman / OpenAPI)
+
+```vim
+:TuiterImportPostman collection.json   " opens a new .http buffer
+:TuiterImportOpenapi openapi.json
+```
+
+Postman collections are flattened (folders included); OpenAPI specs become one
+request per path+method with query params and example bodies.
+
+### `.env` support
+
+A `.env` file (searched upward from the request file) provides a base layer of
+`{{vars}}`; the selected JSON environment wins on conflicts. Works with or
+without an env JSON file.
+
+### Watch & format
+
+- `:TuiterWatch [seconds]` — re-run the request under the cursor every N
+  seconds, notifying on status changes (toggle again to stop)
+- `:TuiterFormat` — pretty-print the JSON body of the request under the cursor
+- `:TuiterScaffold` — new `.http` buffer with tests/auth/formatting examples
+
 ### Insomnia / Postman mapping
 
 | Insomnia | tuiter |
@@ -230,7 +357,15 @@ Authorization: Bearer {{$body.token}}
 | `:TuiterHistory` | Pick a past request and re-run it |
 | `:TuiterEnv` | Select environment |
 | `:TuiterResponse` | Toggle response window |
-| `:TuiterCopyAs [curl\|python\|js\|go]` | Copy the request under the cursor as a code snippet (no arg = picker) |
+| `:TuiterCopyAs [curl\|python\|js\|ts\|go\|rust\|php\|graphql]` | Copy the request under the cursor as a code snippet (no arg = picker) |
+| `:TuiterStream` | Stream the request under the cursor (SSE, `# @stream`) |
+| `:TuiterWatch [sec]` | Re-run request every N seconds; toggle to stop |
+| `:TuiterJUnit [path]` | Export the last run-all results as JUnit XML |
+| `:TuiterCI` | Run all + write JUnit + exit non-zero on failure (CI) |
+| `:TuiterScaffold` | Open a scaffolded `.http` buffer |
+| `:TuiterFormat` | Pretty-print the request body JSON under the cursor |
+| `:TuiterImportPostman [file]` | Convert a Postman collection to a `.http` buffer |
+| `:TuiterImportOpenapi [file]` | Convert an OpenAPI spec to a `.http` buffer |
 
 ## GraphQL support
 
@@ -346,6 +481,7 @@ switch with `:TuiterEnv` or `<leader>ie`.
     curl = { timeout = 30, insecure = false, max_redirects = 8, cookie_jar = true, compressed = true },
     env_files = { "http-client.env.json", "tuiter.env.json" },
     default_env = "default",
+    run_all = { concurrency = 1, delay = 150 }, -- parallel collection runner
   },
 }
 ```
@@ -367,14 +503,27 @@ Structure:
 ```
 plugin/tuiter.lua      commands + filetype detection
 ftplugin/http.lua      buffer keymaps + commentstring + omnifunc + diagnostics
+                       + {{var}} hover (K) and definition jump (gd)
 ftplugin/graphql.lua   same for .graphql buffers
-lua/tuiter/init.lua    public API, config, run-all runner
-lua/tuiter/parser.lua  .http parsing + validation (pure Lua)
+lua/tuiter/init.lua    public API, config, run-all runner, watch/JUnit/CI/import
+lua/tuiter/parser.lua  .http parsing + validation + directives (pure Lua)
 lua/tuiter/graphql.lua .graphql parsing (pure Lua)
-lua/tuiter/client.lua  env/var resolution, dynamic values, curl, response parsing, JSON pretty
-lua/tuiter/codegen.lua curl/python/js/go snippet generation
-lua/tuiter/ui.lua      response windows + request sidebar + run summary
-lua/tuiter/history.lua persisted request history
+lua/tuiter/client.lua  env/var resolution, dynamic values, curl, assertions,
+                       named chaining, dotenv, pagination, streaming, response parsing
+lua/tuiter/auth.lua    OAuth2/bearer token management (cached)
+lua/tuiter/codegen.lua curl/python/js/ts/go/rust/php/graphql snippet generation
+lua/tuiter/import.lua  Postman + OpenAPI -> .http conversion (pure functions)
+lua/tuiter/ui.lua      response windows + request sidebar + run summary + streaming
+lua/tuiter/history.lua persisted request history (secrets redacted)
+lua/tuiter/pickers.lua Telescope picker providers
+lua/telescope/_extensions/tuiter.lua  Telescope extension registration
+```
+
+### Telescope extension
+
+```lua
+require("telescope").load_extension("tuiter")
+-- :Telescope tuiter history | requests | env
 ```
 
 ## Notes

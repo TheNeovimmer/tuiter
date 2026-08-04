@@ -224,6 +224,148 @@ eq(#vim.api.nvim_buf_get_lines(ui.state.sidebar_buf, 0, -1, false), 2, "sidebar 
 ui.close_sidebar()
 assert(not ui.sidebar_is_open(), "sidebar close")
 
+-- =====================================================================
+-- Pro features: bearer auth, assertions, pagination, streaming
+-- =====================================================================
+
+local auth_res, auth_done = nil, false
+client.send(
+	{
+		method = "GET",
+		url = "http://127.0.0.1:8999/echo-headers",
+		headers = {},
+		body = nil,
+		vars = {},
+		cwd = ".",
+		auth = { type = "bearer", token = "tok-abc" },
+	},
+	{ timeout = 10 },
+	".",
+	function(resp)
+		auth_res = resp
+		auth_done = true
+	end
+)
+assert(
+	vim.wait(5000, function()
+		return auth_done
+	end),
+	"bearer request timed out"
+)
+local echoed = vim.json.decode(auth_res.body)
+eq(echoed.headers.Authorization, "Bearer tok-abc", "bearer auth injected")
+
+local oauth_res, oauth_done = nil, false
+client.send(
+	{
+		method = "GET",
+		url = "http://127.0.0.1:8999/echo-headers",
+		headers = {},
+		body = nil,
+		vars = {},
+		cwd = ".",
+		tests = { "status == 200" },
+		auth = {
+			type = "oauth2",
+			token_url = "http://127.0.0.1:8999/token",
+			client_id = "c",
+			client_secret = "s",
+			scope = "api",
+		},
+	},
+	{ timeout = 10 },
+	".",
+	function(resp)
+		oauth_res = resp
+		oauth_done = true
+	end
+)
+assert(
+	vim.wait(5000, function()
+		return oauth_done
+	end),
+	"oauth2 request timed out"
+)
+eq(vim.json.decode(oauth_res.body).headers.Authorization, "Bearer oauth_token_123", "oauth2 token fetched + injected")
+eq(oauth_res.tests[1] and oauth_res.tests[1].pass, true, "assertion evaluated on real send")
+
+local fail_res, fail_done = nil, false
+client.send(
+	{
+		method = "GET",
+		url = "http://127.0.0.1:8999/fail",
+		headers = {},
+		body = nil,
+		vars = {},
+		cwd = ".",
+		tests = { "status == 200", "body.error exists" },
+	},
+	{ timeout = 10 },
+	".",
+	function(resp)
+		fail_res = resp
+		fail_done = true
+	end
+)
+assert(
+	vim.wait(5000, function()
+		return fail_done
+	end),
+	"fail request timed out"
+)
+eq(fail_res.status, 500, "fail status 500")
+eq(fail_res.tests[1].pass, false, "assertion fails on 500")
+eq(fail_res.failures, 1, "one failed assertion")
+
+local pg_res, pg_done = nil, false
+client.send(
+	{
+		method = "GET",
+		url = "http://127.0.0.1:8999/pages?n=0",
+		headers = {},
+		body = nil,
+		vars = {},
+		opts = { paginate = true },
+		cwd = ".",
+	},
+	{ timeout = 10 },
+	".",
+	function(resp)
+		pg_res = resp
+		pg_done = true
+	end
+)
+assert(
+	vim.wait(8000, function()
+		return pg_done
+	end),
+	"pagination timed out"
+)
+eq(pg_res.paginated, true, "paginated flag")
+eq(pg_res.page_count, 3, "three pages fetched")
+local items = vim.json.decode(pg_res.body)
+eq(vim.json.encode(items), "[0,1,1,2,2,3]", "pages concatenated as one array")
+
+local chunks, stream_done = {}, false
+client.send_stream(
+	{ method = "GET", url = "http://127.0.0.1:8999/sse", headers = {}, body = nil, vars = {}, cwd = "." },
+	{ timeout = 10 },
+	".",
+	function(data)
+		chunks[#chunks + 1] = data
+	end,
+	function(code)
+		stream_done = true
+	end
+)
+assert(
+	vim.wait(8000, function()
+		return stream_done
+	end),
+	"streaming timed out"
+)
+eq(#table.concat(chunks, ""):match("data: %{n:0%}") ~= nil, true, "stream contains first event")
+
 server:kill()
 if failed == 0 then
 	print("ALL INTEGRATION TESTS PASSED")

@@ -4,13 +4,42 @@ local M = {}
 
 --- Parse a list of lines into requests.
 --- Each request: { name, method, url, headers={k=v}, body=nil|string, line=int, vars={k=v}, opts={} }
+--- Parse an `# @auth` directive into a table.
+---   # @auth bearer TOKEN
+---   # @auth oauth2 token_url=.. client_id=.. client_secret=.. scope=..
+---   # @auth refresh token_url=.. client_id=.. client_secret=.. refresh_token=..
+local function parse_auth(str)
+	local auth = {}
+	local kind, rest = str:match("^(%S+)%s*(.-)%s*$")
+	if not kind then
+		return nil
+	end
+	auth.type = kind
+	if kind == "bearer" then
+		auth.token = rest
+		return auth
+	end
+	for k, v in rest:gmatch("([%w_]+)=([^%s]+)") do
+		auth[k] = v
+	end
+	return auth
+end
+
 function M.parse_lines(lines)
 	local requests = {}
 	local cur = nil
 	local in_body = false
 
 	local function start(line, i)
-		cur = { name = "", headers = {}, body = nil, line = i, vars = {}, opts = {} }
+		cur = {
+			name = "",
+			headers = {},
+			body = nil,
+			line = i,
+			vars = {},
+			opts = {},
+			tests = {}, -- # @test assertions
+		}
 		local name = line:match("^###%s*(.*)$")
 		if name then
 			cur.name = name
@@ -31,6 +60,9 @@ function M.parse_lines(lines)
 				cur.method, cur.url = m, u
 			end
 		elseif in_body then
+			if cur.body == nil then
+				cur.body_line = i -- first body content line (for :TuiterFormat)
+			end
 			cur.body = (cur.body or "") .. line .. "\n"
 		elseif line == "" then
 			in_body = true
@@ -42,8 +74,20 @@ function M.parse_lines(lines)
 				cur.name = n
 			end
 			local k, v = line:match("^#%s*@([%w%-_]+)%s*(.-)%s*$")
-			if k and k ~= "name" then
-				cur.opts[k:gsub("%-", "_")] = v == "" and true or v
+			if k then
+				k = k:gsub("%-", "_")
+				if k == "name" then
+					-- handled above
+				elseif k == "test" then
+					cur.tests[#cur.tests + 1] = v
+				elseif k == "auth" then
+					local a = parse_auth(v)
+					if a then
+						cur.auth = a
+					end
+				else
+					cur.opts[k] = v == "" and true or v
+				end
 			end
 		else
 			local k, v = line:match("^([%w%-_]+)%s*:%s*(.*)$")

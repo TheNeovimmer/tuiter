@@ -3,6 +3,74 @@ vim.bo.commentstring = "# %s"
 vim.bo.omnifunc = "v:lua.require('tuiter').complete"
 require("tuiter").setup_keymaps(0)
 
+-- Resolution of {{var}} under the cursor: `K` hover + `gd` definition-jump.
+local function var_under_cursor()
+	local line = vim.api.nvim_get_current_line()
+	local col = vim.api.nvim_win_get_cursor(0)[2]
+	local i = 1
+	while i <= #line do
+		local s = line:find("{{", i, true)
+		if not s then
+			break
+		end
+		local e = line:find("}}", s + 2, true)
+		if not e then
+			break
+		end
+		if col >= s - 1 and col <= e + 1 then
+			return line:sub(s + 2, e - 1)
+		end
+		i = e + 2
+	end
+	return nil
+end
+
+vim.keymap.set("n", "K", function()
+	local name = var_under_cursor()
+	if not name then
+		return
+	end
+	local resolved = require("tuiter.client").substitute("{{" .. name .. "}}", {})
+	local lines
+	if resolved == "{{" .. name .. "}}" then
+		lines = { name, "", "(unresolved placeholder)" }
+	else
+		lines = { name, "", "= " .. tostring(resolved) }
+	end
+	local buf = vim.api.nvim_create_buf(false, true)
+	vim.bo[buf].buftype = "nofile"
+	vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+	local w = vim.api.nvim_open_win(buf, false, {
+		relative = "cursor",
+		width = math.max(20, #(lines[3] or "") + 4),
+		height = #lines,
+		row = 1,
+		col = 0,
+		style = "minimal",
+		border = "rounded",
+	})
+	vim.keymap.set("n", "q", function()
+		pcall(vim.api.nvim_win_close, w, true)
+	end, { buffer = buf })
+end, { buffer = 0, desc = "Tuiter: resolve {{var}} under cursor (preview)" })
+
+vim.keymap.set("n", "gd", function()
+	local name = var_under_cursor()
+	if not name then
+		return
+	end
+	local env_file = require("tuiter").env_file()
+	if not env_file or vim.fn.filereadable(env_file) == 0 then
+		vim.notify("Tuiter: no env file loaded for this project", vim.log.levels.WARN, { title = "Tuiter" })
+		return
+	end
+	vim.cmd("edit " .. vim.fn.fnameescape(env_file))
+	local lnum = vim.fn.search('"' .. vim.fn.escape(name, "[]") .. '"\\s*:', "n")
+	if lnum and lnum > 0 then
+		vim.api.nvim_win_set_cursor(0, { lnum, 0 })
+	end
+end, { buffer = 0, desc = "Tuiter: jump to {{var}} definition in the env file" })
+
 -- Insomnia-style composer highlighting: color-coded methods, blue URLs,
 -- section names, and @vars — applied per window (matchadd is window-scoped).
 local function setup_composer_highlights()

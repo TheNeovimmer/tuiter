@@ -197,7 +197,25 @@ records each response, so later requests can chain off earlier ones.
   :TuiterEnv             Select environment
   :TuiterResponse        Toggle response window
   :TuiterCopyAs [lang]   Copy snippet for the request under the cursor
-                         (curl|python|js|go; no arg = picker)
+                         (curl|python|js|ts|go|rust|php|graphql; no arg = picker)
+  :TuiterStream          Stream the request under the cursor (SSE, `# @stream`)
+  :TuiterWatch [sec]     Re-run the request under the cursor every N seconds;
+                         run again to stop (healthcheck)
+  :TuiterJUnit [path]    Export the last run-all results as JUnit XML
+                         (default tuiter-junit.xml)
+  :TuiterCI              Run all requests headlessly, write JUnit, exit
+                         non-zero on any failure (CI)
+  :TuiterScaffold        Open a scaffolded .http buffer
+  :TuiterFormat          Pretty-print the JSON body under the cursor
+  :TuiterImportPostman   Convert a Postman collection JSON to a .http buffer
+  :TuiterImportOpenapi   Convert an OpenAPI spec JSON to a .http buffer
+
+Pro features, see README for the full guide: named request chaining
+({{login.body.token}}), assertions (`# @test status == 200`), OAuth2/bearer
+auth (`# @auth oauth2 token_url=.. client_id=.. client_secret=..`),
+streaming, pagination (`# @paginate`), .env support, and secret redaction
+in history. In .http buffers `K` previews the resolved value of a {{var}}
+and `gd` jumps to its definition in the env file.
 
 ==============================================================================
 10a. GRAPHQL FILES                                     *tuiter-graphql*
