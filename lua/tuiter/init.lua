@@ -26,6 +26,7 @@ local config = {
 	env_files = { "http-client.env.json", "tuiter.env.json" },
 	default_env = "default",
 	run_all = { concurrency = 1, delay = 150 },
+	windows = { width = 120, max_height = 40, sidebar_width = 62 },
 }
 
 ---@param opts? table
@@ -87,6 +88,8 @@ function M.resend(spec)
 		vim.schedule(function()
 			client.record_response(resp, spec)
 			ui.show(resp, spec, {
+				buf = spec.buf or M.source_buf,
+				windows = config.windows,
 				resend = function()
 					M.resend(spec)
 				end,
@@ -163,8 +166,14 @@ function M.run_all(opts)
 			in_flight = in_flight + 1
 			local spec = vim.deepcopy(requests[i])
 			spec.cwd = dir
+			spec.buf = buf
 			spec.env = client.state.env
-			if not spec.url or not spec.method then
+			if spec.opts and spec.opts.skip then
+				-- # @skip: excluded from run-all / CI (e.g. destructive requests)
+				results[i] = { spec = spec, skipped = true }
+				in_flight = in_flight - 1
+				vim.defer_fn(pump, delay)
+			elseif not spec.url or not spec.method then
 				-- heading-only request (e.g. a bare ### comment block): skip
 				results[i] = {
 					spec = spec,
@@ -176,7 +185,7 @@ function M.run_all(opts)
 				client.send(spec, config.curl, dir, function(resp)
 					vim.schedule(function()
 						client.record_response(resp, spec)
-						ui.mark(spec.url, resp.status)
+						ui.mark_response(spec, resp)
 						results[i] = { spec = spec, resp = resp }
 						in_flight = in_flight - 1
 						vim.defer_fn(pump, delay)
@@ -237,6 +246,7 @@ function M.sidebar()
 			env = client.state.env,
 			run = function(spec)
 				spec.cwd = dir
+				spec.buf = buf
 				M.resend(spec)
 			end,
 			go_to = function(lnum)
@@ -252,6 +262,7 @@ function M.sidebar()
 			switch_env = function()
 				M.select_env({ cwd = dir }, open)
 			end,
+			windows = config.windows,
 		})
 	end
 	open()
@@ -502,30 +513,54 @@ function M.junit(path)
 	local cases, failures = {}, 0
 	local time_total = 0
 	for _, e in ipairs(results) do
-		local resp = e.resp
-		time_total = time_total + (resp.time or 0)
-		local failed = not (resp.ok and resp.status < 400 and (resp.failures or 0) == 0)
-		if failed then
-			failures = failures + 1
-		end
-		local name = e.spec.name ~= "" and e.spec.name or (e.spec.method .. " " .. e.spec.url)
-		local c = string.format('    <testcase classname="tuiter" name="%s" time="%.3f"', xml_esc(name), resp.time or 0)
-		if failed then
-			local msg = string.format(
-				"HTTP %d%s",
-				resp.status,
-				(resp.failures or 0) > 0 and string.format(" / %d assertion failure(s)", resp.failures) or ""
-			)
-			c = c .. '>\n      <failure message="' .. xml_esc(msg) .. '"/>\n    </testcase>'
+		if e.skipped then
+			local name = e.spec.name ~= "" and e.spec.name or (e.spec.method .. " " .. e.spec.url)
+			cases[#cases + 1] =
+				string.format('    <testcase classname="tuiter" name="%s" time="0.000"><skipped/></testcase>', xml_esc(name))
 		else
-			c = c .. "/>"
+			local resp = e.resp
+			time_total = time_total + (resp.time or 0)
+			local failed = not (resp.ok and resp.status < 400 and (resp.failures or 0) == 0)
+			if failed then
+				failures = failures + 1
+			end
+			local name = e.spec.name ~= "" and e.spec.name or (e.spec.method .. " " .. e.spec.url)
+			local c = string.format('    <testcase classname="tuiter" name="%s" time="%.3f"', xml_esc(name), resp.time or 0)
+			if failed then
+				local msg = string.format(
+					"HTTP %d%s",
+					resp.status,
+					(resp.failures or 0) > 0 and string.format(" / %d assertion failure(s)", resp.failures) or ""
+				)
+				c = c .. '>\n      <failure message="' .. xml_esc(msg) .. '"/>\n    </testcase>'
+			else
+				c = c .. "/>"
+			end
+			cases[#cases + 1] = c
 		end
-		cases[#cases + 1] = c
+	end
+	local skipped = 0
+	for _, e in ipairs(results) do
+		if e.skipped then
+			skipped = skipped + 1
+		end
 	end
 	local xml = table.concat({
 		'<?xml version="1.0" encoding="UTF-8"?>',
-		string.format('<testsuites tests="%d" failures="%d" time="%.3f">', #results, failures, time_total),
-		string.format('  <testsuite name="tuiter" tests="%d" failures="%d" time="%.3f">', #results, failures, time_total),
+		string.format(
+			'<testsuites tests="%d" failures="%d" skipped="%d" time="%.3f">',
+			#results,
+			failures,
+			skipped,
+			time_total
+		),
+		string.format(
+			'  <testsuite name="tuiter" tests="%d" failures="%d" skipped="%d" time="%.3f">',
+			#results,
+			failures,
+			skipped,
+			time_total
+		),
 		table.concat(cases, "\n"),
 		"  </testsuite>",
 		"</testsuites>",
@@ -549,9 +584,11 @@ function M.ci(opts)
 		on_done = function(results)
 			local failed = false
 			for _, e in ipairs(results) do
-				local resp = e.resp
-				if not (resp.ok and resp.status < 400 and (resp.failures or 0) == 0) then
-					failed = true
+				if not e.skipped then
+					local resp = e.resp
+					if not (resp.ok and resp.status < 400 and (resp.failures or 0) == 0) then
+						failed = true
+					end
 				end
 			end
 			M.junit(opts.path or "tuiter-junit.xml")

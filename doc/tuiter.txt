@@ -18,6 +18,7 @@ CONTENTS                                                *tuiter-contents*
 13. Public API.............................|tuiter-api|
 14. Highlight groups.......................|tuiter-highlights|
 15. Development............................|tuiter-development|
+16. Health check............................|tuiter-health|
 
 ==============================================================================
 1. INTRODUCTION                                      *tuiter-introduction*
@@ -67,6 +68,8 @@ REST Client style, many requests per file:
 - `Header: value` lines until the first blank line
 - After the blank line, everything until the next `###` is the body
 - `#` lines are comments; `# @name foo` names the request
+- `# @skip` excludes a request from run-all / CI (destructive or flaky
+  requests) — the request still sends normally with <leader>is
 - `@name = value` lines define request-scoped variables (use as `{{name}}`)
 
 Example: >
@@ -129,8 +132,13 @@ composer — color-coded methods, blue URLs, section titles (`###`), and
 
 `<leader>ia` or `:TuiterRunAll` runs every request in the buffer
 sequentially (150ms apart) and opens a summary float: ✓ green / ✗ red
-lines with method, name, status, time, size. `<CR>` on a line jumps to
-that request in the file. Run-all does not pollute history.
+lines with method, name, status, time, size (⏭ grey lines for `# @skip`
+requests, which are never sent). `<CR>` on a line jumps to that request
+in the file. Run-all does not pollute history.
+
+Every send (single run or run-all) also stamps the request line in the
+`.http` file with inline virtual text — `✓ 200 · 45ms` / `✗ 404 · 12ms` —
+so the buffer itself shows the last result.
 
 ==============================================================================
 8. RESPONSE WINDOW                                *tuiter-response*
@@ -274,9 +282,14 @@ current environment and last response. With lualine: >
              cookie_jar = true, compressed = true },
       env_files = { "http-client.env.json", "tuiter.env.json" },
       default_env = "default",
+      run_all = { concurrency = 1, delay = 150 }, -- parallel runner
+      windows = { width = 120, max_height = 40, sidebar_width = 62 }, -- floats
     },
   }
 <
+
+`opts.windows` sizes the response float (width / max_height) and the
+request sidebar (sidebar_width).
 Example — move everything off <leader>i: `opts = { keymaps = { run =
 "<leader>xr", list = "<leader>xl", cancel = false } }`.
 
@@ -323,5 +336,14 @@ wins when it defines them):
   Tuiter* command or open a `.http` file
 - History: stdpath("data")/tuiter/history.json
 - Favorites: stdpath("data")/tuiter/favorites.json
+
+==============================================================================
+16. HEALTH CHECK                                    *tuiter-health*
+
+`:checkhealth tuiter` verifies Neovim >= 0.10, `curl` on PATH, and that
+the data + cookie-jar directories under `stdpath("data")/tuiter` are
+writable (history, favorites, oauth cache and cookies are persisted
+there). Also notes when `jq` is missing (the `J` filter in the response
+window needs it).
 
 vim:tw=78:ts=8:noet:ft=help:norl:

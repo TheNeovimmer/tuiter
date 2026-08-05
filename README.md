@@ -10,12 +10,15 @@ Insomnia/Postman for your editor, written in pure Lua.
 
 - **`.http` request files** — REST Client format: methods, headers, bodies, named `###` sections, `# @name`
 - **Insomnia-style composer** — methods color-coded in the file itself, blue URLs, section titles, `@var`s
+- **Inline result marks** — every send stamps `✓ 200 · 45ms` / `✗ 404` as virtual text on the request line, so the file itself shows what passed and what didn't
 - **Request sidebar** — Postman-style list of every request; run, jump, favorite (`*`), filter (`/`), switch env (`e`), copy-as-curl
-- **Collection runner** — `<leader>ia` runs every request in the file and shows a ✓/✗ summary
+- **Collection runner** — `<leader>ia` runs every request in the file and shows a ✓/✗ summary; `# @skip` requests are excluded (handy for destructive endpoints)
+- **Health check** — `:checkhealth tuiter` verifies Neovim, curl and the data/cookie dirs
 - **Async requests** — `curl` via `vim.system`, zero plugin dependencies; cancel hanging requests with `<leader>ic`
 - **Response viewer with tabs** — Body / Headers / Timeline, like Insomnia's response pane
 - **Timeline tab** — per-phase timing breakdown (DNS, TCP, TLS, TTFB, download) from curl
 - **Status bar** — HTTP code · time · size · env, green/red, in every response window
+- **Inline result marks** — after a send, the request line in the `.http` file shows `✓ 200 · 45ms` as virtual text (red on error / failed assertions)
 - **Dynamic variables** — `{{$timestamp}}`, `{{$uuid}}`, `{{$randomInt}}`, … and response chaining via `{{$body.path.to.field}}`
 - **Named request chaining** — reference any earlier request by name: `{{login.body.token}}`, `{{login.status}}`
 - **Assertions / tests** — `# @test status == 200` per request, checked in the run summary + exported to JUnit JSON
@@ -98,7 +101,8 @@ REST Client style, many requests per file:
 - After the blank line, everything until the next `###` is the request body
 - `#` lines are comments; `# @name foo` names the request (REST Client syntax)
 - Per-request directives: `# @timeout 5` (overrides `curl.timeout`), `# @no-redirect`
-  (skip `-L`), `# @no-log` (don't record this request in history)
+  (skip `-L`), `# @no-log` (don't record this request in history), `# @skip`
+  (exclude from run-all / CI — destructive or flaky requests)
 - `@name = value` lines define request-scoped variables (usable as `{{name}}`)
 
 ```http
@@ -153,8 +157,10 @@ URL, and the last response status (`[200]`/`[404]` marks).
 ### Run all (`<leader>ia` / `:TuiterRunAll`)
 
 Runs every request in the buffer sequentially and opens a summary float —
-✓ green / ✗ red lines with method, name, status, time, size. `<CR>` on a
-line jumps to that request in the file.
+✓ green / ✗ red lines with method, name, status, time, size (⏭ grey lines
+for `# @skip` requests, which are not sent). `<CR>` on a line jumps to
+that request in the file. Requests also stamp their result as inline
+virtual text in the buffer.
 
 ### Response window
 
@@ -367,6 +373,12 @@ without an env JSON file.
 | `:TuiterImportPostman [file]` | Convert a Postman collection to a `.http` buffer |
 | `:TuiterImportOpenapi [file]` | Convert an OpenAPI spec to a `.http` buffer |
 
+## Health check
+
+`:checkhealth tuiter` verifies Neovim >= 0.10, `curl` on PATH, and that the
+data + cookie-jar directories under `stdpath("data")/tuiter` are writable
+(plus an info note when `jq` is missing for the `J` filter).
+
 ## GraphQL support
 
 `.graphql` / `.gql` files get the same tuiter keymaps (send under cursor,
@@ -482,6 +494,7 @@ switch with `:TuiterEnv` or `<leader>ie`.
     env_files = { "http-client.env.json", "tuiter.env.json" },
     default_env = "default",
     run_all = { concurrency = 1, delay = 150 }, -- parallel collection runner
+    windows = { width = 120, max_height = 40, sidebar_width = 62 }, -- response float + sidebar sizing
   },
 }
 ```

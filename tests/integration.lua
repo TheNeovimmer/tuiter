@@ -140,10 +140,15 @@ eq(client.substitute("{{$body.method}}", {}), "GET", "chain method")
 eq(client.substitute("{{$body.path}}", {}), "/api?x=1", "chain path")
 eq(client.substitute("{{$status}}", {}), "200", "chain status")
 
--- run all: summary window opens with results
+-- run all: summary window opens with results; # @skip requests are not
+-- executed; every sent request gets an inline ✓/✗ virt-text mark
 vim.api.nvim_buf_set_lines(0, 0, -1, false, {
 	"### Ping",
 	"GET http://127.0.0.1:8999/api",
+	"",
+	"### Skip me",
+	"# @skip",
+	"DELETE http://127.0.0.1:8999/never",
 	"",
 	"### Post",
 	"POST http://127.0.0.1:8999/users",
@@ -152,6 +157,7 @@ vim.api.nvim_buf_set_lines(0, 0, -1, false, {
 	'{"x":1}',
 })
 local tuiter = require("tuiter")
+local abuf = vim.api.nvim_get_current_buf() -- buffer handle before the summary float steals focus
 tuiter.run_all()
 local ran = vim.wait(8000, function()
 	return ui.state.summary_win and vim.api.nvim_win_is_valid(ui.state.summary_win)
@@ -159,8 +165,33 @@ end)
 assert(ran, "run_all summary window")
 assert(ui.state.results["http://127.0.0.1:8999/api"] == 200, "run_all GET marked")
 assert(ui.state.results["http://127.0.0.1:8999/users"] == 201, "run_all POST marked")
+assert(ui.state.results["http://127.0.0.1:8999/never"] == nil, "skipped request not executed")
+local skip_entry
+for _, e in ipairs(tuiter.last_run) do
+	if e.skipped then
+		skip_entry = e
+	end
+end
+assert(skip_entry ~= nil, "skipped entry flagged in results")
+eq(skip_entry.spec.method, "DELETE", "skipped entry keeps its method")
+-- inline virt-text marks on the sent request lines
+local mark_found = false
+local marks = vim.api.nvim_buf_get_extmarks(abuf, ui.mark_ns, 0, -1, { details = true })
+for _, m in ipairs(marks) do
+	local det = m[4]
+	if det and det.virt_text and det.virt_text[1] and det.virt_text[1][1]:match("✓ 200") then
+		mark_found = true
+	end
+end
+assert(mark_found, "virt-text mark shows ✓ 200 on the request line")
 pcall(vim.api.nvim_win_close, ui.state.summary_win, true)
 ui.state.summary_win = nil
+
+-- JUnit export includes skipped entries as <skipped/> and passes counts
+tuiter.junit("/tmp/tuiter-junit-test.xml")
+local junit = table.concat(vim.fn.readfile("/tmp/tuiter-junit-test.xml"), "\n")
+assert(junit:match('skipped="1"') ~= nil, "junit reports one skipped")
+assert(junit:match("<skipped/>") ~= nil, "junit has a <skipped/> testcase")
 
 -- favorites toggle + persistence roundtrip
 ui.toggle_fav("http://fav.test/x")

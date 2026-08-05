@@ -65,6 +65,12 @@ if f then
 	eq(#parser.parse_lines(vim.split(content, "\n")), 9, "demo requests")
 end
 
+-- # @skip directive: opts.skip is boolean true (excluded from run-all/CI)
+local reqs4 = parser.parse_lines({ "### Destructive", "# @skip", "DELETE http://x.test/things" })
+eq(reqs4[1].opts.skip, true, "skip directive parses")
+local reqs5 = parser.parse_lines({ "### Normal", "GET http://x.test/" })
+eq(reqs5[1].opts.skip, nil, "no skip without directive")
+
 -- --- substitution ---
 client.state.env = "prod"
 client.state.env_vars = { token = "TOK123", host = "prod.example.com" }

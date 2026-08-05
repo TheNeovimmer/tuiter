@@ -24,8 +24,11 @@ local M = {
 		sidebar_requests = {}, -- specs backing the current sidebar
 		sidebar_entries = {}, -- entries currently listed (filtered)
 		sidebar_opts = nil,
+		marks = {}, -- buf -> { line -> extmark id } (inline result marks)
 	},
 }
+
+M.mark_ns = vim.api.nvim_create_namespace("tuiter_marks")
 
 local FAVS_FILE = vim.fn.stdpath("data") .. "/tuiter/favorites.json"
 
@@ -191,13 +194,14 @@ local function float_col()
 	return col
 end
 
-local function open_floats(tab_buf, body_buf, body_title)
+local function open_floats(tab_buf, body_buf, body_title, win_cfg)
 	local cols, rows = vim.o.columns, vim.o.lines
 	local col = float_col()
-	local width = math.max(50, math.min(120, cols - col - 2))
+	local mh = (win_cfg or {}).max_height or 40
+	local width = math.max(50, math.min((win_cfg or {}).width or 120, cols - col - 2))
 	local zoomed = M.state.zoomed
 	local head_win = nil
-	local body_h = zoomed and math.min(rows - 6, 60) or math.max(5, math.min(40, rows - 12))
+	local body_h = zoomed and math.min(rows - 6, math.max(mh, 60)) or math.max(5, math.min(mh, rows - 12))
 	if not zoomed then
 		head_win = vim.api.nvim_open_win(tab_buf, false, {
 			relative = "editor",
@@ -412,7 +416,10 @@ function M.show(resp, spec, opts)
 	opts = opts or {}
 	M.state.prev = M.state.last -- save for diff-vs-previous
 	M.state.last = { resp = resp, spec = spec, opts = opts }
-	M.mark(spec.url, resp.status)
+	if opts.buf then
+		spec.buf = spec.buf or opts.buf
+	end
+	M.mark_response(spec, resp)
 	M.close()
 
 	local json = is_json(resp)
@@ -423,7 +430,8 @@ function M.show(resp, spec, opts)
 	local tab_buf = mk_buf()
 	local body_buf = mk_buf()
 	local env = spec.env and ("(env: " .. spec.env .. ")") or ""
-	local head_win, body_win = open_floats(tab_buf, body_buf, string.format("%s %s %s", spec.method, spec.url, env))
+	local head_win, body_win =
+		open_floats(tab_buf, body_buf, string.format("%s %s %s", spec.method, spec.url, env), opts.windows)
 
 	for _, b in ipairs({ tab_buf, body_buf }) do
 		buf_map(b, "q", M.close, "Close response")
@@ -545,6 +553,38 @@ end
 
 function M.mark(url, status)
 	M.state.results[url] = status
+end
+
+--- Mark the request line in its source buffer with the last response
+--- status as inline virtual text (and refresh the sidebar status map).
+--- rest.nvim/httpyac-style: `✓ 200 · 45ms` / `✗ 404 · 12ms` at EOL.
+function M.mark_response(spec, resp)
+	M.mark(spec.url, resp.status)
+	local buf = spec.buf
+	if not buf or not vim.api.nvim_buf_is_valid(buf) or not spec.line or spec.line < 1 then
+		return
+	end
+	local failed = not resp.ok or resp.status >= 400 or (resp.failures or 0) > 0
+	local text
+	if resp.status > 0 then
+		text = string.format("%s %d · %dms", failed and "✗" or "✓", resp.status, (resp.time or 0) * 1000)
+	else
+		text = "✗ error"
+	end
+	local line = spec.line - 1
+	local marks = M.state.marks[buf]
+	if not marks then
+		marks = {}
+		M.state.marks[buf] = marks
+	end
+	if marks[line] then
+		pcall(vim.api.nvim_buf_del_extmark, buf, M.mark_ns, marks[line])
+	end
+	marks[line] = vim.api.nvim_buf_set_extmark(buf, M.mark_ns, line, 0, {
+		virt_text = { { text, failed and "TuiterError" or "TuiterOk" } },
+		virt_text_pos = "eol",
+		hl_mode = "combine",
+	})
 end
 
 -- ---------------------------------------------------------------------------
@@ -922,7 +962,7 @@ function M.show_sidebar(requests, opts)
 	end
 	local win = vim.api.nvim_open_win(buf, true, {
 		relative = "editor",
-		width = 62,
+		width = (opts.windows and opts.windows.sidebar_width) or 62,
 		height = math.min(#lines + 2, vim.o.lines - 4),
 		row = 2,
 		col = 2,
@@ -992,35 +1032,41 @@ function M.show_run_summary(results, opts)
 	local buf = mk_buf()
 	local lines = {}
 	for i, entry in ipairs(results) do
-		local resp = entry.resp
-		local failed = (resp.failures or 0) > 0
-		local ok = (resp.ok and resp.status < 400) and not failed
-		local icon = ok and "✓" or "✗"
-		local tag = failed and " (tests failed)" or ""
-		local status = string.format(
-			"%s %-3s %-6s %-24s · %dms · %s%s",
-			icon,
-			resp.status,
-			entry.spec.method,
-			trunc(entry.spec.name ~= "" and entry.spec.name or entry.spec.url, 24),
-			(resp.time or 0) * 1000,
-			fmt_size(resp.size),
-			tag
-		)
-		lines[#lines + 1] = status
-		local hl = ok and "TuiterOk" or "TuiterError"
-		local line_no = #lines
-		vim.api.nvim_buf_add_highlight(buf, -1, hl, line_no - 1, 0, -1)
-		-- indent failed assertions under their request
-		if resp.tests and #resp.tests > 0 then
-			for _, te in ipairs(resp.tests) do
-				local mark = te.pass and "✓" or "✗"
-				local l = "    " .. mark .. " " .. te.expr
-				if te.actual ~= nil then
-					l = l .. "  · got: " .. trunc(fmt_actual(te.actual), 50)
+		if entry.skipped then
+			local label = entry.spec.name ~= "" and entry.spec.name or entry.spec.url
+			lines[#lines + 1] = string.format("⏭  %-6s %s", entry.spec.method or "", trunc(label, 24))
+			vim.api.nvim_buf_add_highlight(buf, -1, "Comment", #lines - 1, 0, -1)
+		else
+			local resp = entry.resp
+			local failed = (resp.failures or 0) > 0
+			local ok = (resp.ok and resp.status < 400) and not failed
+			local icon = ok and "✓" or "✗"
+			local tag = failed and " (tests failed)" or ""
+			local status = string.format(
+				"%s %-3s %-6s %-24s · %dms · %s%s",
+				icon,
+				resp.status,
+				entry.spec.method,
+				trunc(entry.spec.name ~= "" and entry.spec.name or entry.spec.url, 24),
+				(resp.time or 0) * 1000,
+				fmt_size(resp.size),
+				tag
+			)
+			lines[#lines + 1] = status
+			local hl = ok and "TuiterOk" or "TuiterError"
+			local line_no = #lines
+			vim.api.nvim_buf_add_highlight(buf, -1, hl, line_no - 1, 0, -1)
+			-- indent failed assertions under their request
+			if resp.tests and #resp.tests > 0 then
+				for _, te in ipairs(resp.tests) do
+					local mark = te.pass and "✓" or "✗"
+					local l = "    " .. mark .. " " .. te.expr
+					if te.actual ~= nil then
+						l = l .. "  · got: " .. trunc(fmt_actual(te.actual), 50)
+					end
+					lines[#lines + 1] = l
+					vim.api.nvim_buf_add_highlight(buf, -1, te.pass and "Comment" or "TuiterError", #lines - 1, 0, -1)
 				end
-				lines[#lines + 1] = l
-				vim.api.nvim_buf_add_highlight(buf, -1, te.pass and "Comment" or "TuiterError", #lines - 1, 0, -1)
 			end
 		end
 	end
