@@ -30,6 +30,7 @@ vim.cmd("runtime! plugin/tuiter.lua")
 eq(vim.fn.exists(":Tuiter") == 2, true, ":Tuiter command")
 eq(vim.fn.exists(":TuiterCopyAs") == 2, true, ":TuiterCopyAs command")
 eq(vim.fn.exists(":TuiterRunAll") == 2, true, ":TuiterRunAll command")
+eq(vim.fn.exists(":TuiterImportCurl") == 2, true, ":TuiterImportCurl command")
 
 -- open demo.http -> filetype + keymaps + ftplugin diagnostics
 local hbuf = vim.fn.bufadd("examples/demo.http")
@@ -99,6 +100,54 @@ eq(payload.method, "POST", "graphql sent as POST")
 eq(payload.echo:match('"query"') ~= nil, true, "graphql body is JSON query envelope")
 
 os.remove("examples/__e2e__.graphql")
+
+-- OAuth2 401 auto-refresh: client-credentials token -> /protected 401s with
+-- the cc token -> tuiter re-fetches via the refresh grant -> 200
+local oauth = {
+	type = "oauth2",
+	token_url = "http://127.0.0.1:8999/oauth-token",
+	client_id = "cid",
+	client_secret = "cs",
+	scope = "",
+}
+local oauth_file = vim.fn.stdpath("data") .. "/tuiter/oauth.json"
+local oauth_saved = vim.fn.filereadable(oauth_file) == 1 and vim.fn.readfile(oauth_file) or nil
+require("tuiter.auth").invalidate(oauth)
+require("tuiter.client").state.response = nil -- clear the previous test's response
+require("tuiter").resend({ method = "GET", url = "http://127.0.0.1:8999/protected", auth = oauth, no_log = true })
+local ok2 = vim.wait(8000, function()
+	local r = require("tuiter.client").state.response
+	return r and r.status and r.status > 0
+end)
+eq(ok2, true, "oauth2 request completed")
+local r2 = require("tuiter.client").state.response
+eq(r2.status, 200, "oauth2 401 auto-refreshed via refresh grant")
+eq(vim.json.decode(r2.body).ok == true, true, "oauth2 refreshed token accepted")
+
+-- multipart file upload through the real send path (relative @path)
+require("tuiter.client").state.response = nil
+require("tuiter").resend({
+	method = "POST",
+	url = "http://127.0.0.1:8999/users",
+	headers = { ["Content-Type"] = "multipart/form-data" },
+	body = "name=ada\npayload=@tests/fixtures/upload.txt",
+	no_log = true,
+})
+local ok3 = vim.wait(8000, function()
+	local r = require("tuiter.client").state.response
+	return r and r.status and r.status > 0
+end)
+eq(ok3, true, "multipart upload completed")
+local r3 = require("tuiter.client").state.response
+eq(r3.status, 201, "multipart upload status")
+local echo = vim.json.decode(r3.body).echo or ""
+eq(echo:match("file content") ~= nil, true, "multipart file field sent as file content")
+if oauth_saved then
+	vim.fn.writefile(oauth_saved, oauth_file)
+else
+	os.remove(oauth_file)
+end
+
 if failed == 0 then
 	print("ALL E2E TESTS PASSED")
 else

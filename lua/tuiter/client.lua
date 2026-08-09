@@ -3,6 +3,7 @@ local M = {
 	state = {
 		env = nil,
 		env_file = nil,
+		env_mtime = nil, -- mtime of the loaded env file (hot reload)
 		env_vars = {},
 		response = nil, -- last response (for {{$body.*}} / {{$status}})
 		responses = {}, -- name -> response, for named chaining {{name.body.x}}
@@ -79,6 +80,7 @@ function M.set_env(name, dir, opts)
 	end
 	M.state.env = name
 	M.state.env_file = path
+	M.state.env_mtime = path and vim.fn.getftime(path) or nil
 	M.state.env_vars = vars
 end
 
@@ -95,6 +97,10 @@ function M.ensure_env(dir, opts)
 		return
 	end
 	if M.state.env and M.state.env_file == path then
+		-- hot reload: re-read the env file when it changed on disk
+		if M.state.env_mtime ~= vim.fn.getftime(path) then
+			M.set_env(M.state.env, dir, opts)
+		end
 		return
 	end
 	local envs = read_env_file(path)
@@ -581,6 +587,8 @@ function M.parse_response(stdout, stderr, exit_code, marker, signal)
 	local head, body = stdout:match("^(.-)\r?\n\r?\n(.*)$")
 	if head then
 		resp.headers, resp.body = head, body
+		-- curl -i writes CRLF headers; strip the \r so the Headers tab is clean
+		resp.headers = resp.headers:gsub("\r", "")
 	else
 		resp.body = stdout
 	end
@@ -662,7 +670,18 @@ function M.curl_args(spec, curl_opts, marker)
 		end
 		if mode == "multipart" and #fields > 0 then
 			for _, f in ipairs(fields) do
-				vim.list_extend(args, { "-F", f })
+				-- `key=@path` reads the file (curl -F); relative paths resolve
+				-- against the request file's directory, not nvim's cwd
+				local name, val = f:match("^([^=]+)=(.*)$")
+				if val and val:sub(1, 1) == "@" then
+					local p = val:sub(2)
+					if spec.cwd and not p:match("^/") then
+						p = spec.cwd .. "/" .. p
+					end
+					vim.list_extend(args, { "-F", name .. "=@" .. p })
+				else
+					vim.list_extend(args, { "-F", f })
+				end
 			end
 		elseif mode == "urlencoded" and #fields > 0 then
 			for _, f in ipairs(fields) do
@@ -781,6 +800,16 @@ end
 --- Handles OAuth2/bearer auth, # @test assertions (evaluated into
 --- resp.tests / resp.failures) and # @paginate pagination.
 function M.send(spec, curl_opts, cwd, cb)
+	-- # @delay N: wait N ms before sending (pacing in run-all, "wait for a
+	-- background job" polling). Stripped so the recursive call doesn't loop.
+	local delay = tonumber((spec.opts or {}).delay)
+	if delay and delay > 0 then
+		spec.opts.delay = nil
+		vim.defer_fn(function()
+			M.send(spec, curl_opts, cwd, cb)
+		end, delay)
+		return
+	end
 	local done = function(resp)
 		if resp then
 			M.eval_tests(spec.tests, resp)
@@ -808,18 +837,24 @@ function M.send(spec, curl_opts, cwd, cb)
 			return
 		end
 		do_send(spec, curl_opts, cwd, function(resp)
-			-- 401 + refresh flow: invalidate the cached token and retry once
-			if resp.status == 401 and spec.auth and spec.auth.type == "refresh" then
-				require("tuiter.auth").invalidate(spec.auth)
-				require("tuiter.auth").ensure_token(spec.auth, cwd, curl_opts, function(t2)
-					if t2 then
-						spec = inject_auth(spec, t2)
-						do_send(spec, curl_opts, cwd, done)
-					else
-						done(resp)
-					end
-				end)
-				return
+			-- 401 + refresh: invalidate the cached token and retry once via the
+			-- refresh grant — works for an explicit `# @auth refresh` and for an
+			-- `oauth2` flow whose token endpoint returned a refresh_token
+			if resp.status == 401 and spec.auth then
+				local auth = require("tuiter.auth")
+				local refresh = auth.refresh_flow(spec.auth)
+				if refresh then
+					auth.invalidate(spec.auth)
+					auth.ensure_token(refresh, cwd, curl_opts, function(t2)
+						if t2 then
+							spec = inject_auth(spec, t2)
+							do_send(spec, curl_opts, cwd, done)
+						else
+							done(resp)
+						end
+					end)
+					return
+				end
 			end
 			done(resp)
 		end)

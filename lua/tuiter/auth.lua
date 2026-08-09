@@ -17,19 +17,27 @@ local function file()
 end
 
 local function load()
-	local f = file()
-	if vim.fn.filereadable(f) == 0 then
+	local f = io.open(file(), "r")
+	if not f then
 		return {}
 	end
-	local ok, data = pcall(vim.json.decode, table.concat(vim.fn.readfile(f), "\n"))
+	local content = f:read("*a")
+	f:close()
+	local ok, data = pcall(vim.json.decode, content)
 	if not ok or type(data) ~= "table" then
 		return {}
 	end
 	return data
 end
 
+-- plain Lua io (not vim.fn.*): load/save are called from vim.system callbacks,
+-- where Vimscript functions like readfile/writefile are illegal (E5560)
 local function save(cache)
-	pcall(vim.fn.writefile, { vim.json.encode(cache) }, file())
+	local f = io.open(file(), "w")
+	if f then
+		f:write(vim.json.encode(cache))
+		f:close()
+	end
 end
 
 --- Stable cache key for an auth table.
@@ -127,6 +135,22 @@ function M.invalidate(auth)
 	local cache = load()
 	cache[key(auth)] = nil
 	save(cache)
+end
+
+--- An auth table for the refresh grant when `auth` can refresh: an explicit
+--- `refresh` flow (the directive carries the refresh_token) or an `oauth2`
+--- flow whose token endpoint returned a refresh_token (cached at fetch time).
+--- nil when there is nothing to refresh with.
+function M.refresh_flow(auth)
+	if auth.type ~= "oauth2" and auth.type ~= "refresh" then
+		return nil
+	end
+	local cache = load()
+	local rt = (cache[key(auth)] or {}).refresh_token or auth.refresh_token
+	if not rt or rt == "" then
+		return nil
+	end
+	return vim.tbl_extend("force", auth, { type = "refresh", refresh_token = rt })
 end
 
 return M

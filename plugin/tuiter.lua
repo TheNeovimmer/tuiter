@@ -91,3 +91,7 @@ end, {
 	complete = "file",
 	desc = "Convert an OpenAPI spec JSON to a .http buffer",
 })
+
+vim.api.nvim_create_user_command("TuiterImportCurl", function()
+	require("tuiter").import_curl()
+end, { desc = "Paste a curl command (DevTools / docs / gh api -i) and convert it to a .http buffer" })

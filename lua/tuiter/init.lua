@@ -168,11 +168,17 @@ function M.run_all(opts)
 			spec.cwd = dir
 			spec.buf = buf
 			spec.env = client.state.env
+			-- per-request `# @delay` overrides run_all.delay; strip it here so
+			-- client.send doesn't wait a second time
+			local wait = tonumber((spec.opts or {}).delay) or delay
+			if spec.opts then
+				spec.opts.delay = nil
+			end
 			if spec.opts and spec.opts.skip then
 				-- # @skip: excluded from run-all / CI (e.g. destructive requests)
 				results[i] = { spec = spec, skipped = true }
 				in_flight = in_flight - 1
-				vim.defer_fn(pump, delay)
+				vim.defer_fn(pump, wait)
 			elseif not spec.url or not spec.method then
 				-- heading-only request (e.g. a bare ### comment block): skip
 				results[i] = {
@@ -180,7 +186,7 @@ function M.run_all(opts)
 					resp = { ok = false, status = 0, headers = "", body = "", error = "no method/URL" },
 				}
 				in_flight = in_flight - 1
-				vim.defer_fn(pump, delay)
+				vim.defer_fn(pump, wait)
 			else
 				client.send(spec, config.curl, dir, function(resp)
 					vim.schedule(function()
@@ -188,7 +194,7 @@ function M.run_all(opts)
 						ui.mark_response(spec, resp)
 						results[i] = { spec = spec, resp = resp }
 						in_flight = in_flight - 1
-						vim.defer_fn(pump, delay)
+						vim.defer_fn(pump, wait)
 					end)
 				end)
 			end
@@ -683,6 +689,33 @@ function M.import(kind, file)
 	vim.bo[buf].filetype = "http"
 	vim.api.nvim_set_current_buf(buf)
 	vim.notify("Tuiter: imported " .. file, vim.log.levels.INFO, { title = "Tuiter" })
+end
+
+--- Paste a curl command (browser DevTools, docs, `gh api -i`) and convert it
+--- to a new .http buffer. `:TuiterImportCurl`. Prefills from the " register
+--- when it holds a curl command.
+function M.import_curl()
+	local imp = require("tuiter.import")
+	local function convert(str)
+		local text, err = imp.curl(str)
+		if err then
+			vim.notify("Tuiter: " .. err, vim.log.levels.ERROR, { title = "Tuiter" })
+			return
+		end
+		local buf = vim.api.nvim_create_buf(false, false)
+		vim.api.nvim_buf_set_name(buf, "curl.http")
+		vim.api.nvim_buf_set_lines(buf, 0, -1, false, vim.split(text, "\n", { plain = true }))
+		vim.bo[buf].filetype = "http"
+		vim.api.nvim_set_current_buf(buf)
+		vim.notify("Tuiter: imported curl command", vim.log.levels.INFO, { title = "Tuiter" })
+	end
+	local reg = vim.fn.getreg('"')
+	local default = reg:match("^%s*curl") and reg or ""
+	vim.ui.input({ prompt = "curl command:", default = default }, function(s)
+		if s and s ~= "" then
+			convert(s)
+		end
+	end)
 end
 
 --- The active env file path (for `gd` definition-jumping).

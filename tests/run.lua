@@ -543,6 +543,94 @@ local dv = client.dotenv(dtmp)
 eq(dv.DB_HOST, "localhost", "dotenv var")
 eq(dv.GREET, "hi there", "dotenv strip quotes")
 
+-- =====================================================================
+-- New: CRLF cleanup, env hot reload, # @delay, multipart file fields,
+-- curl import (:TuiterImportCurl)
+-- =====================================================================
+
+-- --- CRLF headers are stripped so the Headers tab has no ^M ---
+local cr = client.parse_response("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{}", "", 0, "@@tuiterC@@")
+eq(cr.status, 200, "crlf status")
+eq(cr.headers:match("\r") == nil, true, "crlf headers stripped")
+eq(cr.headers:match("^HTTP/1.1 200 OK"), "HTTP/1.1 200 OK", "crlf headers intact")
+
+-- --- env hot reload (mtime change) ---
+local etmp = vim.fn.tempname() .. "/"
+vim.fn.mkdir(etmp, "p")
+vim.fn.writefile({ '{"dev":{"k":"v1"}}' }, etmp .. "tuiter.env.json")
+client.state.env, client.state.env_file, client.state.env_vars, client.state.env_mtime = nil, nil, {}, nil
+client.ensure_env(etmp, { env_files = { "tuiter.env.json" } })
+eq(client.state.env_vars.k, "v1", "env first load")
+vim.uv.sleep(1100) -- getftime has 1s resolution: guarantee a different mtime
+vim.fn.writefile({ '{"dev":{"k":"v2"}}' }, etmp .. "tuiter.env.json")
+client.ensure_env(etmp, { env_files = { "tuiter.env.json" } })
+eq(client.state.env_vars.k, "v2", "env reloads after mtime change")
+client.state.env, client.state.env_file, client.state.env_vars, client.state.env_mtime = nil, nil, {}, nil
+
+-- --- # @delay directive ---
+local dl = parser.parse_lines({ "### A", "GET https://x.test/", "# @delay 500" })
+eq(dl[1].opts.delay, "500", "delay directive parses")
+
+-- --- multipart file upload: `key=@path` resolves against spec.cwd ---
+local mf = client.curl_args({
+	method = "POST",
+	url = "http://x.test/upload",
+	headers = { ["Content-Type"] = "multipart/form-data" },
+	body = "name=ada\navatar=@pic.png",
+	vars = {},
+	cwd = "/tmp/proj",
+}, { cookie_jar = false })
+eq(
+	vim.tbl_contains(mf, "-F") and vim.tbl_contains(mf, "avatar=@/tmp/proj/pic.png"),
+	true,
+	"multipart file resolved vs cwd"
+)
+eq(vim.tbl_contains(mf, "name=ada"), true, "multipart plain field kept")
+local mf2 = client.curl_args({
+	method = "POST",
+	url = "http://x.test/upload",
+	headers = { ["Content-Type"] = "multipart/form-data" },
+	body = "avatar=@/abs/pic.png",
+	vars = {},
+	cwd = "/tmp/proj",
+}, { cookie_jar = false })
+eq(vim.tbl_contains(mf2, "avatar=@/abs/pic.png"), true, "multipart absolute path kept")
+
+-- --- curl import (:TuiterImportCurl) ---
+local ic = require("tuiter.import")
+local c1, e1 = ic.curl("curl 'https://api.x/users'")
+eq(e1 == nil and c1:match("^GET https://api%.x/users$") ~= nil, true, "curl import basic")
+local c2 = ic.curl("curl -X POST https://api.x/users -H 'Content-Type: application/json' --data-raw '{\"a\":1}'")
+eq(c2:match("^POST https://api%.x/users") ~= nil, true, "curl import method")
+eq(c2:match("Content%-Type: application/json") ~= nil, true, "curl import header")
+eq(c2:find('{"a":1}', 1, true) ~= nil, true, "curl import json body")
+local c3 = ic.curl("curl -d 'a=1' -d 'b=2' http://x/")
+eq(c3:find("Content-Type: application/x-www-form-urlencoded", 1, true) ~= nil, true, "curl import urlencoded ct")
+eq(c3:find("a=1", 1, true) ~= nil and c3:find("b=2", 1, true) ~= nil, true, "curl import fields as lines")
+local c3b = ic.curl("curl -d 'a=1' http://x/")
+eq(c3b:find("Content-Type: application/x-www-form-urlencoded", 1, true) ~= nil, true, "curl import single -d field ct")
+local c4 = ic.curl("curl -u admin:secret http://x/")
+eq(
+	c4:find("Authorization: Basic " .. vim.base64.encode("admin:secret"), 1, true) ~= nil,
+	true,
+	"curl import basic auth"
+)
+local c5 = ic.curl("curl -G http://x/search --data-urlencode 'q=hello world'")
+eq(c5:find("http://x/search?q=hello%20world", 1, true) ~= nil, true, "curl import -G query")
+local c6 = ic.curl("curl -F 'name=ada' -F 'avatar=@pic.png' http://x/upload")
+eq(c6:find("Content-Type: multipart/form-data", 1, true) ~= nil, true, "curl import multipart ct")
+eq(c6:find("avatar=@pic.png", 1, true) ~= nil, true, "curl import multipart file field")
+local c7 = ic.curl("curl -k https://x/")
+eq(c7:match("^# @insecure") ~= nil, true, "curl import insecure")
+local c8 = ic.curl("curl -A 'my-ua' -e http://ref/ -b 'sid=1' http://x/")
+eq(c8:find("User-Agent: my-ua", 1, true) ~= nil, true, "curl import user-agent")
+eq(c8:find("Referer: http://ref/", 1, true) ~= nil, true, "curl import referer")
+eq(c8:find("Cookie: sid=1", 1, true) ~= nil, true, "curl import cookie header")
+local c8b = ic.curl("curl -b cookies.txt http://x/")
+eq(c8b:find("Cookie:", 1, true) == nil, true, "curl import cookie jar skipped")
+local _, e9 = ic.curl("echo hi")
+eq(e9 ~= nil, true, "curl import no url errors")
+
 if failed == 0 then
 	print("ALL UNIT TESTS PASSED (incl. features)")
 else

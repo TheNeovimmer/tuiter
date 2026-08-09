@@ -26,7 +26,9 @@ Insomnia/Postman for your editor, written in pure Lua.
 - **Streaming (SSE)** — `# @stream` pipes curl -N chunks into a live float
 - **Pagination** — `# @paginate` follows `rel="next"` Link headers and concatenates array pages
 - **Copy as curl / code snippets** — shell-safe curl plus `:TuiterCopyAs python|js|ts|go|rust|php|graphql`
-- **Import** — convert Postman collections and OpenAPI specs to `.http` via `:TuiterImportPostman` / `:TuiterImportOpenapi`
+- **Import** — convert Postman collections, OpenAPI specs, and curl commands
+  (DevTools / docs / `gh api -i`) to `.http` via `:TuiterImportPostman` /
+  `:TuiterImportOpenapi` / `:TuiterImportCurl`
 - **`.env` support** — `.env` vars are layered under the selected JSON environment
 - **Requester tooling** — `:TuiterWatch` healthcheck, `:TuiterCI` headless run-all with exit code + JUnit, `:TuiterJUnit`, `:TuiterFormat`, `:TuiterScaffold`
 - **Response tooling** — diff against previous (`D`), jq filter (`J`), open in a tab (`o`), JSON key navigation (`]k`/`[k`), and a Tests tab (`4`)
@@ -55,7 +57,7 @@ Insomnia/Postman for your editor, written in pure Lua.
   "TheNeovimmer/tuiter",
   branch = "main",
   dependencies = {}, -- zero plugin dependencies: pure Lua + curl only
-  cmd = { "Tuiter", "TuiterRun", "TuiterRunAll", "TuiterCancel", "TuiterSaveBody", "TuiterHistory", "TuiterEnv", "TuiterResponse", "TuiterCopyAs", "TuiterStream", "TuiterWatch", "TuiterJUnit", "TuiterCI", "TuiterScaffold", "TuiterFormat", "TuiterImportPostman", "TuiterImportOpenapi" },
+  cmd = { "Tuiter", "TuiterRun", "TuiterRunAll", "TuiterCancel", "TuiterSaveBody", "TuiterHistory", "TuiterEnv", "TuiterResponse", "TuiterCopyAs", "TuiterStream", "TuiterWatch", "TuiterJUnit", "TuiterCI", "TuiterScaffold", "TuiterFormat", "TuiterImportPostman", "TuiterImportOpenapi", "TuiterImportCurl" },
   ft = { "http", "graphql" },
   opts = {},
 }
@@ -102,8 +104,12 @@ REST Client style, many requests per file:
 - `#` lines are comments; `# @name foo` names the request (REST Client syntax)
 - Per-request directives: `# @timeout 5` (overrides `curl.timeout`), `# @no-redirect`
   (skip `-L`), `# @no-log` (don't record this request in history), `# @skip`
-  (exclude from run-all / CI — destructive or flaky requests)
+  (exclude from run-all / CI — destructive or flaky requests), `# @delay 500`
+  (wait N ms before sending; also paces run-all)
 - `@name = value` lines define request-scoped variables (usable as `{{name}}`)
+- `multipart/form-data` bodies accept `key=@path` file fields — relative
+  paths resolve against the request file's directory, and `{{vars}}` work
+  inside them (see `examples/upload.http`)
 
 ```http
 ### Auth
@@ -296,8 +302,10 @@ GET https://api.example.com/private
 GET https://api.example.com/private
 ```
 
-Tokens are cached (with expiry) in `stdpath("data")/tuiter/oauth.json`; the
-`refresh` flow invalidates and re-fetches once when a request comes back 401.
+Tokens are cached (with expiry) in `stdpath("data")/tuiter/oauth.json`. Any
+flow that can refresh does: an explicit `refresh` flow, and an `oauth2` flow
+whose token endpoint returned a `refresh_token` — a 401 invalidates the
+cached token and retries once via the refresh grant.
 
 ### Streaming (SSE), pagination & per-request curl
 
@@ -314,23 +322,29 @@ GET https://api.example.com/items?page=1
 
 `# @stream` pipes `curl -N` output into a live float (`:TuiterStream`).
 Other per-request directives: `# @timeout 5`, `# @no-redirect`, `# @no-log`,
-`# @cert path`, `# @key path`, `# @proxy url`, `# @insecure`.
+`# @delay 500`, `# @cert path`, `# @key path`, `# @proxy url`, `# @insecure`.
 
-### Import (Postman / OpenAPI)
+### Import (Postman / OpenAPI / curl)
 
 ```vim
 :TuiterImportPostman collection.json   " opens a new .http buffer
 :TuiterImportOpenapi openapi.json
+:TuiterImportCurl                     " paste a curl command (DevTools / docs / gh api -i)
 ```
 
 Postman collections are flattened (folders included); OpenAPI specs become one
-request per path+method with query params and example bodies.
+request per path+method with query params and example bodies. `:TuiterImportCurl`
+parses DevTools-style commands (`-X -H -d/--data-raw -F -u -A -k -G …`) into a
+new `.http` buffer — it prefills from the `"` register when it holds a curl
+command.
 
 ### `.env` support
 
 A `.env` file (searched upward from the request file) provides a base layer of
 `{{vars}}`; the selected JSON environment wins on conflicts. Works with or
-without an env JSON file.
+without an env JSON file. Env files are hot-reloaded: editing
+`tuiter.env.json` / `http-client.env.json` takes effect on the next request
+without switching environments.
 
 ### Watch & format
 
@@ -372,6 +386,7 @@ without an env JSON file.
 | `:TuiterFormat` | Pretty-print the request body JSON under the cursor |
 | `:TuiterImportPostman [file]` | Convert a Postman collection to a `.http` buffer |
 | `:TuiterImportOpenapi [file]` | Convert an OpenAPI spec to a `.http` buffer |
+| `:TuiterImportCurl` | Paste a curl command → new `.http` buffer |
 
 ## Health check
 

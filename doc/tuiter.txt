@@ -217,11 +217,15 @@ records each response, so later requests can chain off earlier ones.
   :TuiterFormat          Pretty-print the JSON body under the cursor
   :TuiterImportPostman   Convert a Postman collection JSON to a .http buffer
   :TuiterImportOpenapi   Convert an OpenAPI spec JSON to a .http buffer
+  :TuiterImportCurl      Paste a curl command (DevTools / docs / `gh api -i`)
+                         and convert it to a .http buffer
 
 Pro features, see README for the full guide: named request chaining
 ({{login.body.token}}), assertions (`# @test status == 200`), OAuth2/bearer
-auth (`# @auth oauth2 token_url=.. client_id=.. client_secret=..`),
-streaming, pagination (`# @paginate`), .env support, and secret redaction
+auth (`# @auth oauth2 token_url=.. client_id=.. client_secret=..` — a 401
+auto-refreshes via the refresh grant whenever a refresh_token is
+available), streaming, pagination (`# @paginate`), .env support (hot-
+reloaded on disk changes), per-request `# @delay`, and secret redaction
 in history. In .http buffers `K` previews the resolved value of a {{var}}
 and `gd` jumps to its definition in the env file.
 
@@ -244,7 +248,9 @@ with JSON body `{"query": ..., "variables": <# @variables or null>}`.
 10b. FORM BODIES & COOKIES                             *tuiter-forms*
 
 - `multipart/form-data` + body of `key=value` lines -> curl `-F` fields
-  (file uploads: `key=@path`). Raw `--boundary` bodies are sent as-is.
+  (file uploads: `key=@path`; relative paths resolve against the request
+  file's directory and `{{vars}}` inside them are substituted). Raw
+  `--boundary` bodies are sent as-is.
 - `application/x-www-form-urlencoded` + body of `key=value` lines (no `&`)
   -> curl `--data-urlencode` fields (values encoded for you).
 - `curl.cookie_jar = true` (default) keeps a per-project jar under
