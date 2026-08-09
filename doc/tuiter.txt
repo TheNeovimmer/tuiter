@@ -97,6 +97,7 @@ LazyVim; shown as a "tuiter" which-key group):
   <leader>ik   Keymap help float
   <leader>ih   Request history (pick & re-run)
   <leader>ie   Select environment
+  <leader>iv   Show resolved values of every {{var}} in the request
   <leader>ir   Toggle response window
   ]r / [r      Next / previous request
   gx           Open the request URL in the browser (vars resolved)
@@ -113,7 +114,8 @@ vars, env vars, dynamic values).
 `<leader>il` or `:Tuiter` opens a Postman-style list of every request in
 the file: ★ favorites first, then color-coded methods (GET green, POST
 blue, PUT/PATCH yellow, DELETE red), name, URL, and the last response
-status as a `[200]`/`[404]` mark. A hint bar shows the keys.
+status as a `[200 · 45ms]`/`[404 · 12ms]`/`[✗ error]` mark. A hint bar
+shows the keys.
 
   <CR>   Run request (sidebar stays open — response opens to its right)
   g      Jump to the request in the file
@@ -165,6 +167,10 @@ of an empty body (the request line gets a `✗ error` mark).
   f      Save body to a file (:TuiterSaveBody)
   z      Zoom: response fills the screen (tab bar hidden)
   r      Resend the request
+  P      Copy the JSONPath of the node under the cursor
+  V      Copy the JSON value at the cursor (or the pretty subtree)
+  U      Copy the resolved request URL (method + URL)
+  gx     Open the request URL in the browser
   ?      Keymap help
 
 - Body tab: JSON is pretty-printed, treesitter-highlighted and foldable
@@ -179,6 +185,12 @@ of an empty body (the request line gets a `✗ error` mark).
 
 Placeholders `{{name}}` are resolved at send time in order: request vars →
 env vars → shell env → dynamic values. Unresolved names stay visible.
+
+`<leader>iv` / `:TuiterVars` opens the *vars inspector*: every {{var}} used
+by the request under the cursor with its resolved value and source
+(request / env / os / dynamic / response), and `⚠ unresolved` for anything
+that won't resolve — the fastest way to see what an env actually
+substituted before you send.
 
   {{$timestamp}}      Unix seconds
   {{$uuid}}           Random v4 UUID (lowercase)
@@ -291,6 +303,7 @@ current environment and last response. With lualine: >
         run = "<leader>is", list = "<leader>il", run_all = "<leader>ia",
         cancel = "<leader>ic", help = "<leader>ik",
         history = "<leader>ih", env = "<leader>ie", response = "<leader>ir",
+        vars = "<leader>iv", -- show resolved {{vars}} of the request
         browser = "gx", -- open request URL in browser (vim.ui.open)
       },
       curl = { timeout = 30, insecure = false, max_redirects = 8,

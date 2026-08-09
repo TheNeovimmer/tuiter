@@ -133,6 +133,7 @@ Content-Type: application/json
 | `<leader>ik` | Keymap help float |
 | `<leader>ih` | Request history (pick & re-run) |
 | `<leader>ie` | Select environment |
+| `<leader>iv` | Show resolved values of every `{{var}}` in the request (vars inspector) |
 | `<leader>ir` | Toggle response window |
 | `]r` / `[r` | Next / previous request |
 | `gx` | Open the request URL in your browser (`vim.ui.open`, vars resolved) |
@@ -147,7 +148,8 @@ env vars, dynamic values).
 
 Lists every request in the file — ★ favorites first, method
 (color-coded: GET green, POST blue, PUT/PATCH yellow, DELETE red), name,
-URL, and the last response status (`[200]`/`[404]` marks).
+URL, and the last response status (`[200 · 45ms]`/`[404 · 12ms]`/`[✗ error]`
+marks).
 
 | Key | Action |
 |---|---|
@@ -198,10 +200,17 @@ instead of an empty body, and the request line gets a `✗ error` mark.
 | `J` | Filter the body through `jq` (requires jq on PATH) |
 | `o` | Open the current tab in an editable new tab |
 | `]k` / `[k` | Jump to next / previous JSON key (Body tab) |
+| `P` | Copy the JSONPath of the node under the cursor (`$.users[0].name`) |
+| `V` | Copy the JSON value at the cursor (scalar, or the whole pretty subtree) |
+| `U` | Copy the resolved request URL (method + URL, vars substituted) |
+| `gx` | Open the request URL in your browser |
 | `?` | Keymap help |
 
 - **Body tab**: JSON is pretty-printed, treesitter-highlighted and
-  foldable (`zc`/`zo`); HTML/XML/CSS/JS bodies get their filetype syntax too
+  foldable (`zc`/`zo`), with line numbers — `P` copies the JSONPath of the
+  node under the cursor (`$.users[0].name`), `V` copies its value (or the
+  whole pretty subtree for containers); HTML/XML/CSS/JS bodies get their
+  filetype syntax too
 - **Headers tab**: response headers with keys highlighted
 - **Timeline tab**: per-phase timings — DNS lookup, TCP connect, TLS
   handshake, request sent, waiting (TTFB), download, total — plus size,
@@ -212,6 +221,13 @@ instead of an empty body, and the request line gets a `✗ error` mark.
 Placeholders are resolved at send time, in order: request vars → env vars →
 shell env → dynamic values. Unresolved names stay visible so you can see
 what's missing.
+
+`<leader>iv` (or `:TuiterVars`) opens the **vars inspector** — every
+`{{var}}` used by the request under the cursor, its resolved value, and
+which source it came from (`request` / `env` / `os` / `dynamic` /
+`response`), with `⚠ unresolved` for anything that won't resolve. It's the
+fastest way to answer "what did this env actually substitute?" before you
+send.
 
 | Variable | Meaning |
 |---|---|
@@ -511,6 +527,7 @@ switch with `:TuiterEnv` or `<leader>ie`.
       run = "<leader>is", list = "<leader>il", run_all = "<leader>ia",
       cancel = "<leader>ic", help = "<leader>ik",
       history = "<leader>ih", env = "<leader>ie", response = "<leader>ir",
+      vars = "<leader>iv", -- show resolved {{vars}} of the request under cursor
       browser = "gx", -- open request URL in browser (vim.ui.open)
     },
     curl = { timeout = 30, insecure = false, max_redirects = 8, cookie_jar = true, compressed = true },

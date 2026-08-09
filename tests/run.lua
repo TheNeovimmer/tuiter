@@ -631,6 +631,48 @@ eq(c8b:find("Cookie:", 1, true) == nil, true, "curl import cookie jar skipped")
 local _, e9 = ic.curl("echo hi")
 eq(e9 ~= nil, true, "curl import no url errors")
 
+-- --- ui.json_path: JSONPath from the pretty render ---
+local function plines(body)
+	return vim.split(client.pretty_json(body), "\n")
+end
+local a = plines('{"a": {"b": 1}, "list": [1, {"x": 2}]}')
+eq(ui.json_path(a, 1), "$", "jsonpath root")
+eq(ui.json_path(a, 2), "$.a", "jsonpath nested key")
+eq(ui.json_path(a, 3), "$.a.b", "jsonpath scalar value")
+eq(ui.json_path(a, 5), "$.list", "jsonpath array key")
+eq(ui.json_path(a, 6), "$.list[0]", "jsonpath scalar element")
+eq(ui.json_path(a, 7), "$.list[1]", "jsonpath container element")
+eq(ui.json_path(a, 8), "$.list[1].x", "jsonpath deep")
+local r = plines('[{"z": 9}, "hi", 5]')
+eq(ui.json_path(r, 3), "$[0].z", "jsonpath root array key")
+eq(ui.json_path(r, 5), "$[1]", "jsonpath root array string elem")
+eq(ui.json_path(r, 6), "$[2]", "jsonpath root array number elem")
+local n = plines("[[1, 2], [3]]")
+eq(ui.json_path(n, 3), "$[0][0]", "jsonpath nested array a")
+eq(ui.json_path(n, 4), "$[0][1]", "jsonpath nested array b")
+eq(ui.json_path(n, 7), "$[1][0]", "jsonpath nested array c")
+local m = plines('{"a-b": 1, "x y": 2}')
+eq(ui.json_path(m, 2), '$["a-b"]', "jsonpath dotted key")
+eq(ui.json_path(m, 3), '$["x y"]', "jsonpath space key")
+local e = plines('{"empty": {}, "lst": []}')
+eq(ui.json_path(e, 2), "$.empty", "jsonpath empty object")
+eq(ui.json_path(e, 3), "$.lst", "jsonpath empty array")
+
+-- --- client.resolve_name: substitution precedence ---
+client.state.env_vars = { token = "env-token", user_id = "9" }
+local v1, s1 = client.resolve_name("token", { token = "req-token" })
+eq(v1, "req-token", "resolve request var wins")
+eq(s1, "request", "resolve request source")
+local v2, s2 = client.resolve_name("user_id", {})
+eq(v2, "9", "resolve env var")
+eq(s2, "env", "resolve env source")
+local v3 = client.resolve_name("$uuid", {})
+eq(v3 ~= nil and #v3 == 36, true, "resolve dynamic uuid")
+local v4 = client.resolve_name("nope_123", {})
+eq(v4, nil, "resolve unresolved nil")
+eq(client.substitute("x{{" .. "token}}y", {}), "xenv-tokeny", "substitute env")
+eq(client.substitute("{{nope_123}}", {}), "{{nope_123}}", "substitute unresolved kept")
+
 if failed == 0 then
 	print("ALL UNIT TESTS PASSED (incl. features)")
 else
