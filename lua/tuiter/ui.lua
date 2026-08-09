@@ -34,6 +34,7 @@ local FAVS_FILE = vim.fn.stdpath("data") .. "/tuiter/favorites.json"
 
 vim.api.nvim_set_hl(0, "TuiterOk", { link = "DiagnosticOk" })
 vim.api.nvim_set_hl(0, "TuiterError", { link = "DiagnosticError" })
+vim.api.nvim_set_hl(0, "TuiterRunning", { link = "Comment" })
 vim.api.nvim_set_hl(0, "TuiterGet", { link = "DiagnosticOk" })
 vim.api.nvim_set_hl(0, "TuiterPost", { link = "DiagnosticInfo" })
 vim.api.nvim_set_hl(0, "TuiterPut", { link = "DiagnosticWarn" })
@@ -67,7 +68,7 @@ local HELP_SECTIONS = {
 	},
 	{
 		"buffer",
-		"<leader>is send  <leader>il sidebar  <leader>ia run all  <leader>ic cancel  <leader>ik help  ]r/[r next/prev  <leader>ih history  <leader>ie env  <leader>ir response  :TuiterCopyAs lang",
+		"<leader>is/<CR> send  <leader>il sidebar  <leader>ia run all  <leader>ic cancel  <leader>ik help  ]r/[r next/prev  <leader>ih history  <leader>ie env  <leader>ir response  gx open URL  :TuiterCopyAs lang",
 	},
 }
 
@@ -95,7 +96,8 @@ local function is_json(resp)
 	if resp.headers:lower():match("content%-type:.-json") then
 		return true
 	end
-	return resp.body:match("^%s*[%[{%]") ~= nil
+	-- body starts with { or [ (bare [ inside a class is escaped with %)
+	return resp.body:match("^%s*[%[{]") ~= nil
 end
 
 local function content_type(resp)
@@ -245,13 +247,20 @@ local function render_tabs()
 	end
 	local reason = resp.headers:match("^HTTP/%S+ %d+ ([^\r\n]*)") or ""
 	local ok = resp.ok and resp.status < 400
-	local status = string.format(
-		"HTTP %d%s · %dms · %s",
-		resp.status,
-		reason ~= "" and (" " .. reason) or "",
-		(resp.time or 0) * 1000,
-		fmt_size(resp.size)
-	)
+	local status
+	if resp.status > 0 then
+		status = string.format(
+			"HTTP %d%s · %dms · %s",
+			resp.status,
+			reason ~= "" and (" " .. reason) or "",
+			(resp.time or 0) * 1000,
+			fmt_size(resp.size)
+		)
+	elseif resp.error and resp.error ~= "" then
+		status = "✗ " .. trunc(resp.error, 60)
+	else
+		status = "no response"
+	end
 	if #line + #status + 3 < width then
 		line = line .. string.rep(" ", width - #line - #status) .. status
 	end
@@ -322,7 +331,9 @@ local function render_content()
 		if d.json and M.state.pretty and d.pretty then
 			content = d.pretty
 		end
-		if content == "" then
+		if resp.error and resp.error ~= "" then
+			content = "✗ " .. resp.error
+		elseif content == "" then
 			content = "(empty body)"
 		end
 		vim.api.nvim_buf_set_lines(buf, 0, -1, false, vim.split(content, "\n"))
@@ -398,17 +409,16 @@ local function set_statusline(win, resp, spec)
 	local ok = resp.ok and resp.status < 400
 	local hl = ok and "TuiterStatusOk" or "TuiterStatusErr"
 	local env = spec.env and ("   env: " .. spec.env) or ""
-	vim.wo[win].statusline = string.format(
-		"%%#%s# tuiter  %s %s  ·  HTTP %d %s  ·  %dms  ·  %s%s %%*",
-		hl,
-		spec.method,
-		spec.url,
-		resp.status,
-		reason ~= "" and reason or "",
-		(resp.time or 0) * 1000,
-		fmt_size(resp.size),
-		env
-	)
+	local status
+	if resp.status > 0 then
+		status =
+			string.format("HTTP %d %s · %dms · %s", resp.status, reason, (resp.time or 0) * 1000, fmt_size(resp.size))
+	elseif resp.error and resp.error ~= "" then
+		status = "✗ " .. resp.error
+	else
+		status = "no response"
+	end
+	vim.wo[win].statusline = string.format("%%#%s# tuiter  %s %s  ·  %s%s %%*", hl, spec.method, spec.url, status, env)
 end
 
 --- Show a response. opts: { resend = fn, copy_curl = fn }
@@ -420,6 +430,9 @@ function M.show(resp, spec, opts)
 		spec.buf = spec.buf or opts.buf
 	end
 	M.mark_response(spec, resp)
+	if resp.error and resp.error ~= "" and resp.status == 0 then
+		vim.notify("Tuiter: " .. resp.error, vim.log.levels.WARN, { title = "Tuiter" })
+	end
 	M.close()
 
 	local json = is_json(resp)
@@ -553,6 +566,30 @@ end
 
 function M.mark(url, status)
 	M.state.results[url] = status
+end
+
+--- Mark the request line as in-flight with a "running" indicator. The mark
+--- is stored in the same table as result marks, so mark_response replaces it
+--- when the response lands (instant feedback instead of silence while waiting).
+function M.mark_running(spec)
+	local buf = spec.buf
+	if not buf or not vim.api.nvim_buf_is_valid(buf) or not spec.line or spec.line < 1 then
+		return
+	end
+	local line = spec.line - 1
+	local marks = M.state.marks[buf]
+	if not marks then
+		marks = {}
+		M.state.marks[buf] = marks
+	end
+	if marks[line] then
+		pcall(vim.api.nvim_buf_del_extmark, buf, M.mark_ns, marks[line])
+	end
+	marks[line] = vim.api.nvim_buf_set_extmark(buf, M.mark_ns, line, 0, {
+		virt_text = { { "↻ running…", "TuiterRunning" } },
+		virt_text_pos = "eol",
+		hl_mode = "combine",
+	})
 end
 
 --- Mark the request line in its source buffer with the last response
@@ -960,6 +997,7 @@ function M.show_sidebar(requests, opts)
 	if M.state.filter ~= "" then
 		title = title .. "  filter: " .. M.state.filter
 	end
+	title = " requests (" .. #entries .. ")" .. title
 	local win = vim.api.nvim_open_win(buf, true, {
 		relative = "editor",
 		width = (opts.windows and opts.windows.sidebar_width) or 62,
@@ -968,7 +1006,7 @@ function M.show_sidebar(requests, opts)
 		col = 2,
 		border = "rounded",
 		style = "minimal",
-		title = " requests" .. title .. " ",
+		title = title .. " ",
 		title_pos = "center",
 	})
 	vim.wo[win].statusline =

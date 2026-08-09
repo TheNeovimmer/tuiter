@@ -49,6 +49,14 @@ for _, m in ipairs(vim.api.nvim_buf_get_keymap(0, "n")) do
 	end
 end
 eq(#kmaps >= 8, true, "http buffer keymaps: " .. #kmaps)
+local descs = {}
+for _, m in ipairs(vim.api.nvim_buf_get_keymap(0, "n")) do
+	if m.desc and m.desc:match("^Tuiter") then
+		descs[m.lhs] = m.desc
+	end
+end
+eq(descs["<CR>"] ~= nil, true, "<CR> sends request")
+eq(descs["gx"] ~= nil, true, "gx opens URL")
 -- diagnostics: clean demo -> no warnings
 eq(#vim.diagnostic.get(hbuf), 0, "no diagnostics in clean demo.http")
 -- introduce an error line -> warning appears
@@ -100,6 +108,53 @@ eq(payload.method, "POST", "graphql sent as POST")
 eq(payload.echo:match('"query"') ~= nil, true, "graphql body is JSON query envelope")
 
 os.remove("examples/__e2e__.graphql")
+
+-- running mark: /slow sleeps 3s, so the ↻ mark is visible while in flight
+local slow = "examples/__e2e_slow__.http"
+vim.fn.writefile({ "### Slow", "GET http://127.0.0.1:8999/slow" }, slow)
+vim.cmd("edit " .. slow)
+local uis = require("tuiter.ui").state
+local mark_ns = require("tuiter.ui").mark_ns
+local slow_buf = vim.fn.bufnr("%")
+local function mark_text(line)
+	local m = uis.marks[slow_buf] and uis.marks[slow_buf][line]
+	if not m then
+		return nil
+	end
+	local res = vim.api.nvim_buf_get_extmark_by_id(slow_buf, mark_ns, m, { details = true })
+	return res[3] and res[3].virt_text and res[3].virt_text[1][1] or nil
+end
+require("tuiter.client").state.response = nil
+vim.api.nvim_win_set_cursor(0, { 2, 0 })
+require("tuiter").run()
+eq(mark_text(0) == "↻ running…", true, "running mark while in flight: " .. tostring(mark_text(0)))
+local ok4 = vim.wait(10000, function()
+	local r = require("tuiter.client").state.response
+	return r and r.status and r.status > 0
+end)
+eq(ok4, true, "slow request completed")
+local done_text = mark_text(0) or ""
+eq(done_text:match("^✓") ~= nil, true, "running mark replaced by result: " .. tostring(done_text))
+os.remove(slow)
+
+-- error surfacing: nothing listens on :9999 -> curl exit 7, not a silent blank
+local dead = "examples/__e2e_dead__.http"
+vim.fn.writefile({ "### Dead", "GET http://127.0.0.1:9999/nope" }, dead)
+vim.cmd("edit " .. dead)
+slow_buf = vim.fn.bufnr("%")
+require("tuiter.client").state.response = nil
+vim.api.nvim_win_set_cursor(0, { 2, 0 })
+require("tuiter").run()
+local ok5 = vim.wait(8000, function()
+	local r = require("tuiter.client").state.response
+	return r and r.status ~= nil
+end)
+eq(ok5, true, "failed request completed")
+local r5 = require("tuiter.client").state.response
+eq(r5.status == 0 and r5.error ~= nil and r5.error ~= "", true, "curl error captured: " .. tostring(r5.error))
+local etext = mark_text(0) or ""
+eq(etext:match("error") ~= nil, true, "request line marked with error: " .. tostring(etext))
+os.remove(dead)
 
 -- OAuth2 401 auto-refresh: client-credentials token -> /protected 401s with
 -- the cc token -> tuiter re-fetches via the refresh grant -> 200
