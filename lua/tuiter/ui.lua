@@ -16,6 +16,7 @@ local M = {
 		pretty = true, -- pretty vs raw JSON body
 		display = nil, -- { raw, pretty, json } of the shown body
 		results = {}, -- url -> http status, shown as marks in the sidebar
+		resp_detail = {}, -- url -> { time, size, error } for the sidebar marks
 		zoomed = false, -- content maximized (tab bar hidden)
 		favs = {}, -- url -> true (persisted)
 		filter = "", -- sidebar filter
@@ -64,11 +65,11 @@ local HELP_SECTIONS = {
 	},
 	{
 		"response",
-		"q close  1/2/3 or t tabs (body/headers/timeline)  p pretty/raw  y copy  c copy-curl  C copy-snippet  f save  z zoom  r resend  ? help",
+		"q close  1/2/3 or t tabs (body/headers/timeline)  p pretty/raw  y copy  c copy-curl  C copy-snippet  f save  z zoom  r resend  P json-path  V json-value  U copy-url  gx open URL  ? help",
 	},
 	{
 		"buffer",
-		"<leader>is/<CR> send  <leader>il sidebar  <leader>ia run all  <leader>ic cancel  <leader>ik help  ]r/[r next/prev  <leader>ih history  <leader>ie env  <leader>ir response  gx open URL  :TuiterCopyAs lang",
+		"<leader>is/<CR> send  <leader>iv vars  <leader>il sidebar  <leader>ia run all  <leader>ic cancel  <leader>ik help  ]r/[r next/prev  <leader>ih history  <leader>ie env  <leader>ir response  gx open URL  :TuiterCopyAs lang",
 	},
 }
 
@@ -281,6 +282,11 @@ end
 
 --- Rows for the Insomnia-style "Timeline" tab (from curl timing data).
 function M.timeline_lines(resp)
+	local lines, w = {}, 22
+	if resp.error and resp.error ~= "" and resp.status == 0 then
+		lines[#lines + 1] = "✗ " .. resp.error
+		lines[#lines + 1] = ""
+	end
 	local ts = resp.times or {}
 	local function ms(v)
 		return v and math.floor(v * 1000) or nil
@@ -300,7 +306,6 @@ function M.timeline_lines(resp)
 		{ "Download", ms(delta(ts.starttransfer, ts.total)) },
 		{ "Total", ms(ts.total) },
 	}
-	local lines, w = {}, 22
 	for _, r in ipairs(rows) do
 		lines[#lines + 1] = ("%-" .. w .. "s %s"):format(r[1], r[2] and (r[2] .. "ms") or "–")
 	end
@@ -491,8 +496,18 @@ function M.show(resp, spec, opts)
 	buf_map(body_buf, "[k", function()
 		M.jump_key(-1)
 	end, "Previous JSON key")
+	buf_map(body_buf, "P", M.copy_json_path, "Copy JSON path")
+	buf_map(body_buf, "V", M.copy_json_value, "Copy JSON value")
+	buf_map(body_buf, "U", M.copy_url, "Copy resolved URL")
+	buf_map(body_buf, "gx", function()
+		local last = M.state.last
+		if last then
+			vim.ui.open(client.substitute(last.spec.url, last.spec.vars))
+		end
+	end, "Open request URL in browser")
 
 	vim.wo[body_win].wrap = true
+	vim.wo[body_win].number = true -- Postman-style line numbers on the response
 	set_statusline(body_win, resp, spec)
 	M.state.head_win, M.state.body_win = head_win, body_win
 	render_tabs()
@@ -548,6 +563,87 @@ function M.yank_body()
 	vim.notify("Tuiter: " .. TAB_NAMES[M.state.tab]:lower() .. " copied", vim.log.levels.INFO, { title = "Tuiter" })
 end
 
+--- JSON body tab helpers for `P` / `V`.
+local function body_lines()
+	if
+		not is_valid(M.state.body_win)
+		or M.state.tab ~= 1
+		or not M.state.pretty
+		or not M.state.display
+		or not M.state.display.json
+	then
+		return nil
+	end
+	return vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(M.state.body_win), 0, -1, false)
+end
+
+--- Extract the value at the cursor: scalar value, or the pretty-printed
+--- subtree when the node is a container ({"key": {…}} / bare { [).
+local function body_value()
+	local lines = body_lines()
+	if not lines then
+		return nil
+	end
+	local line = vim.api.nvim_win_get_cursor(M.state.body_win)[1]
+	local l = lines[line] or ""
+	local is_container = l == "{" or l == "[" or l:match('%": %[%{%[]%s*$') ~= nil
+	if is_container then
+		local indent = #(l:match("^( *)"))
+		local out = { l }
+		for i = line + 1, #lines do
+			out[#out + 1] = lines[i]
+			local close = lines[i]:match("^%s*([%]}])%s*$")
+			if close and #(lines[i]:match("^( *)")) <= indent then
+				break
+			end
+		end
+		return table.concat(out, "\n")
+	end
+	local v = l:match('^ *"[^%"]+":%s*(.-)%s*$')
+	if v == nil then
+		v = l:match("^%s*(.-)%s*$")
+	end
+	v = v:gsub(",%s*$", "") -- pretty render trails commas on non-final array items
+	if v:sub(1, 1) == '"' and v:sub(-1) == '"' then
+		v = v:sub(2, -2):gsub('\\"', '"')
+	end
+	return v
+end
+
+--- `P`: copy the JSONPath of the node under the cursor ($.users[0].name).
+function M.copy_json_path()
+	local lines = body_lines()
+	if not lines then
+		return
+	end
+	local line = vim.api.nvim_win_get_cursor(M.state.body_win)[1]
+	local path = M.json_path(lines, line)
+	vim.fn.setreg('"', path)
+	vim.notify("Tuiter: copied " .. path, vim.log.levels.INFO, { title = "Tuiter" })
+end
+
+--- `V`: copy the JSON value at the cursor (scalar, or the pretty subtree).
+function M.copy_json_value()
+	local v = body_value()
+	if v == nil or v == "" then
+		vim.notify("Tuiter: nothing to copy here", vim.log.levels.INFO, { title = "Tuiter" })
+		return
+	end
+	vim.fn.setreg('"', v)
+	vim.notify("Tuiter: copied value", vim.log.levels.INFO, { title = "Tuiter" })
+end
+
+--- `U`: copy the resolved request URL (method + URL, vars substituted).
+function M.copy_url()
+	local last = M.state.last
+	if not last then
+		return
+	end
+	local url = client.substitute(last.spec.url, last.spec.vars)
+	vim.fn.setreg('"', last.spec.method .. " " .. url)
+	vim.notify("Tuiter: copied " .. last.spec.method .. " " .. url, vim.log.levels.INFO, { title = "Tuiter" })
+end
+
 function M.save_body()
 	if not is_valid(M.state.body_win) then
 		return
@@ -597,6 +693,7 @@ end
 --- rest.nvim/httpyac-style: `✓ 200 · 45ms` / `✗ 404 · 12ms` at EOL.
 function M.mark_response(spec, resp)
 	M.mark(spec.url, resp.status)
+	M.state.resp_detail[spec.url] = { time = resp.time, size = resp.size, error = resp.error }
 	local buf = spec.buf
 	if not buf or not vim.api.nvim_buf_is_valid(buf) or not spec.line or spec.line < 1 then
 		return
@@ -671,6 +768,47 @@ local function pretty_or_raw(body)
 	return (p or body or "") .. "\n"
 end
 
+--- Show every {{var}} used by a request with its resolved value and source
+--- (request / env / os / dynamic / response). `<leader>iv` / :TuiterVars.
+function M.vars_float(spec)
+	local names = {}
+	local function collect(str)
+		if type(str) ~= "string" then
+			return
+		end
+		for name in str:gmatch("{{" .. "([%w_$%.]+)" .. "}}") do
+			names[name] = true
+		end
+	end
+	collect(spec.url)
+	for _, h in ipairs(spec.headers or {}) do
+		collect(h)
+	end
+	collect(spec.body)
+	for k, v in pairs(spec.vars or {}) do
+		names[k] = true
+		if type(v) == "table" then
+			for _, vv in ipairs(v) do
+				collect(tostring(vv))
+			end
+		else
+			collect(tostring(v))
+		end
+	end
+	local sorted = vim.tbl_keys(names)
+	table.sort(sorted)
+	local lines = {}
+	for _, name in ipairs(sorted) do
+		local value, source = client.resolve_name(name, spec.vars)
+		if value == nil then
+			lines[#lines + 1] = "{{" .. name .. "}} → ⚠ unresolved"
+		else
+			lines[#lines + 1] = ("{{" .. name .. "}} → %s (%s)"):format(value:gsub("[\r\n]+", "⏎"), source)
+		end
+	end
+	open_aux(string.format("resolved vars — %s %s", spec.method, trunc(spec.url, 40)), lines)
+end
+
 --- Diff the current response body against the previously shown response.
 ---`D` in the response window.
 function M.diff_prev()
@@ -737,6 +875,76 @@ function M.open_in_tab()
 	end
 	vim.api.nvim_set_current_tabpage(vim.api.nvim_create_tabpage())
 	vim.api.nvim_set_current_buf(buf)
+end
+
+--- Parse a line of the pretty JSON render into its path fragment.
+local function path_part(key)
+	if key:match("^[%w_]+$") then
+		return "." .. key
+	end
+	return '["' .. key .. '"]'
+end
+
+--- Compute the JSONPath ($.users[0].name) of the node on `lineno` of a
+--- tuiter-pretty-printed JSON body (2-space indent, sorted keys, array items
+--- rendered bare). Pure function — unit-tested.
+function M.json_path(lines, lineno)
+	local stack = {} -- { indent = n, part = string }
+	local counts = {} -- indent -> array elements rendered at that indent so far
+	local path = "$"
+	local function set_path()
+		path = "$"
+		for _, e in ipairs(stack) do
+			path = path .. e.part
+		end
+	end
+	local function pop_from(indent, ge)
+		while #stack > 0 and (ge and stack[#stack].indent >= indent or stack[#stack].indent > indent) do
+			table.remove(stack)
+		end
+	end
+	for i = 1, math.min(lineno, #lines) do
+		local line = lines[i]
+		local indent = #(line:match("^( *)"))
+		if line:match("^%s*[%]}][,%s]*$") then
+			-- container close (may carry a trailing comma in the pretty render)
+			pop_from(indent, true)
+			for k in pairs(counts) do
+				if k > indent then
+					counts[k] = nil
+				end
+			end
+			set_path()
+		else
+			local sp, key = line:match('^( *)"([^%"]+)":')
+			if key then
+				pop_from(indent, true)
+				stack[#stack + 1] = { indent = indent, part = path_part(key) }
+				set_path()
+			elseif line:match("^%s*[%{%[]%s*$") then
+				-- bare container open: root, or an array element rendered as { / [
+				if line:match("^%s*%[") and #stack == 0 then
+					-- root array: sentinel so its items get [n] parts
+					stack[#stack + 1] = { indent = 0, part = "" }
+				elseif #stack > 0 then
+					pop_from(indent, false)
+					local idx = counts[indent] or 0
+					counts[indent] = idx + 1
+					stack[#stack + 1] = { indent = indent, part = "[" .. idx .. "]" }
+				end
+				set_path()
+			elseif #stack > 0 then
+				-- scalar array element (e.g. `    1,`, `    "s"`, `    true`)
+				pop_from(indent, true)
+				local idx = counts[indent] or 0
+				counts[indent] = idx + 1
+				local el = "[" .. idx .. "]"
+				set_path()
+				path = path .. el
+			end
+		end
+	end
+	return path
 end
 
 --- Jump to the next/previous top-level JSON key in the pretty body tab.
@@ -971,7 +1179,20 @@ function M.show_sidebar(requests, opts)
 	local buf = mk_buf()
 	local lines = {}
 	for _, r in ipairs(entries) do
-		local mark = M.state.results[r.url] and string.format("[%d]", M.state.results[r.url]) or "    "
+		local st = M.state.results[r.url]
+		local det = M.state.resp_detail[r.url]
+		local mark
+		if st then
+			if st > 0 then
+				mark = string.format("[%d · %dms]", st, math.floor((det and det.time or 0) * 1000))
+			elseif det and det.error and det.error ~= "" then
+				mark = "[✗ " .. trunc(det.error, 9) .. "]"
+			else
+				mark = "[✗]"
+			end
+		else
+			mark = "    "
+		end
 		local star = M.state.favs[r.url] and "★" or " "
 		local label = r.name ~= "" and r.name or r.url
 		local url = r.name ~= "" and r.url or ""

@@ -21,6 +21,7 @@ local config = {
 		history = "<leader>ih",
 		env = "<leader>ie",
 		response = "<leader>ir", -- toggle response window
+		vars = "<leader>iv", -- show resolved {{vars}} of the request under cursor
 		browser = "gx", -- open request URL in browser (vim.ui.open); false to disable
 	},
 	curl = { timeout = 30, insecure = false, max_redirects = 8, cookie_jar = true, compressed = true },
@@ -290,6 +291,21 @@ function M.cancel()
 	vim.notify("Tuiter: canceled in-flight requests", vim.log.levels.INFO, { title = "Tuiter" })
 end
 
+--- Show the resolved values of every {{var}} in the request under the cursor:
+--- request vars, env vars, os env, dynamic values, response references —
+--- with the source each one resolved from. <leader>iv / :TuiterVars.
+function M.vars(opts)
+	opts = opts or {}
+	local buf, spec = request_under_cursor(opts)
+	if not spec then
+		vim.notify("Tuiter: no request under cursor", vim.log.levels.WARN, { title = "Tuiter" })
+		return
+	end
+	client.ensure_env(vim.fn.fnamemodify(vim.api.nvim_buf_get_name(buf), ":p:h"), config)
+	spec.env = client.state.env
+	ui.vars_float(spec)
+end
+
 ---@param opts? {cwd?: string}
 ---@param on_select? fun(name: string) called after the environment is set
 function M.select_env(opts, on_select)
@@ -422,6 +438,11 @@ function M.setup_keymaps(buf)
 	map("[r", function()
 		M.jump_request(-1)
 	end, "Previous request")
+	if km.vars then
+		map(km.vars, function()
+			M.vars({ buf = buf })
+		end, "Show resolved variables")
+	end
 	if km.browser ~= false then
 		map(km.browser or "gx", function()
 			local _, spec = request_under_cursor({ buf = buf })

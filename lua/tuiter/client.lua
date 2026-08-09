@@ -301,6 +301,35 @@ function M.complete(findstart, base)
 	return items
 end
 
+--- Resolve one {{name}} with the full pipeline: request vars > env vars >
+--- os env > dynamic values > named response. Returns (value, source); both
+--- nil when unresolved. Single source of truth for substitute() and the
+--- vars inspector (ui.vars_float).
+function M.resolve_name(name, request_vars)
+	if request_vars and request_vars[name] ~= nil then
+		return tostring(request_vars[name]), "request"
+	end
+	local e = M.state.env_vars[name]
+	if e ~= nil then
+		return tostring(e), "env"
+	end
+	local o = vim.env[name]
+	if o ~= nil then
+		return o, "os"
+	end
+	if name:sub(1, 1) == "$" then
+		local d = dynamic(name)
+		if d ~= nil then
+			return d, "dynamic"
+		end
+	end
+	local nr = named_response(name)
+	if nr ~= nil then
+		return nr, "response"
+	end
+	return nil, nil
+end
+
 --- Replace {{var}} placeholders. Resolution order: request vars > env vars >
 --- os env > dynamic values ({{$...}}). Unresolved names are left untouched so
 --- the user sees what's missing.
@@ -310,24 +339,9 @@ function M.substitute(str, request_vars)
 	end
 	return (
 		str:gsub("{{([%w_$%.]+)}}", function(name)
-			if request_vars and request_vars[name] ~= nil then
-				return tostring(request_vars[name])
-			end
-			local e = M.state.env_vars[name]
-			if e ~= nil then
-				return tostring(e)
-			end
-			local o = vim.env[name]
-			if o ~= nil then
-				return o
-			end
-			local d = name:sub(1, 1) == "$" and dynamic(name) or nil
-			if d ~= nil then
-				return d
-			end
-			local nr = named_response(name)
-			if nr ~= nil then
-				return nr
+			local v = M.resolve_name(name, request_vars)
+			if v ~= nil then
+				return tostring(v)
 			end
 			return "{{" .. name .. "}}"
 		end)

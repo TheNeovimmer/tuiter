@@ -31,6 +31,7 @@ eq(vim.fn.exists(":Tuiter") == 2, true, ":Tuiter command")
 eq(vim.fn.exists(":TuiterCopyAs") == 2, true, ":TuiterCopyAs command")
 eq(vim.fn.exists(":TuiterRunAll") == 2, true, ":TuiterRunAll command")
 eq(vim.fn.exists(":TuiterImportCurl") == 2, true, ":TuiterImportCurl command")
+eq(vim.fn.exists(":TuiterVars") == 2, true, ":TuiterVars command")
 
 -- open demo.http -> filetype + keymaps + ftplugin diagnostics
 local hbuf = vim.fn.bufadd("examples/demo.http")
@@ -57,6 +58,27 @@ for _, m in ipairs(vim.api.nvim_buf_get_keymap(0, "n")) do
 end
 eq(descs["<CR>"] ~= nil, true, "<CR> sends request")
 eq(descs["gx"] ~= nil, true, "gx opens URL")
+eq(
+	descs["<leader>iv"] ~= nil or vim.tbl_contains(vim.tbl_values(descs), "Tuiter: Show resolved variables"),
+	true,
+	"<leader>iv shows resolved vars"
+)
+
+-- vars inspector: {{user_id}} on the demo request resolves from env
+require("tuiter.client").state.env_vars = { user_id = "1" }
+vim.api.nvim_win_set_cursor(0, { 5, 0 })
+require("tuiter").vars()
+local aux = require("tuiter.ui").state.aux_win
+eq(aux ~= nil and vim.api.nvim_win_is_valid(aux), true, "vars float opened")
+local aux_lines = vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(aux), 0, -1, false)
+local hit = false
+for _, l in ipairs(aux_lines) do
+	if l:match("{{user_id}} → 1 %(env%)") then
+		hit = true
+	end
+end
+eq(hit, true, "vars float resolves {{user_id}} -> 1 (env): " .. vim.inspect(aux_lines))
+vim.api.nvim_win_close(aux, true)
 -- diagnostics: clean demo -> no warnings
 eq(#vim.diagnostic.get(hbuf), 0, "no diagnostics in clean demo.http")
 -- introduce an error line -> warning appears
