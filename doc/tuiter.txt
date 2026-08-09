@@ -90,6 +90,7 @@ Buffer-local, in `.http` files, under the `<leader>i` group (free in
 LazyVim; shown as a "tuiter" which-key group):
 
   <leader>is   Send request under cursor
+  <CR>         Send request under cursor (Insomnia/REST Client muscle memory)
   <leader>il   Request sidebar
   <leader>ia   Run all requests in the file (summary)
   <leader>ic   Cancel in-flight requests
@@ -98,6 +99,7 @@ LazyVim; shown as a "tuiter" which-key group):
   <leader>ie   Select environment
   <leader>ir   Toggle response window
   ]r / [r      Next / previous request
+  gx           Open the request URL in the browser (vars resolved)
 
 All keymaps are configurable via |tuiter-config|: set a key to false to
 skip it, or `keymaps = false` to disable all of them.
@@ -138,7 +140,9 @@ in the file. Run-all does not pollute history.
 
 Every send (single run or run-all) also stamps the request line in the
 `.http` file with inline virtual text — `✓ 200 · 45ms` / `✗ 404 · 12ms` —
-so the buffer itself shows the last result.
+so the buffer itself shows the last result. While a request is in flight
+the line shows `↻ running…`; the mark is replaced by the result when the
+response lands.
 
 ==============================================================================
 8. RESPONSE WINDOW                                *tuiter-response*
@@ -147,6 +151,10 @@ Insomnia-style: a tab bar (Body | Headers | Timeline) over the response,
 with a status bar showing `tuiter · METHOD URL · HTTP 200 OK · 123ms ·
 1.2KB · env: dev` — green when ok, red on error/4xx-5xx. The tab bar
 shows HTTP status · time · size on the right.
+
+Failures are never silent: DNS/connection/timeout/cancel errors fire a
+warning toast, and the status bar + Body tab show the curl error instead
+of an empty body (the request line gets a `✗ error` mark).
 
   1/2/3  Body / Headers / Timeline tab
   t      Cycle tabs
@@ -283,6 +291,7 @@ current environment and last response. With lualine: >
         run = "<leader>is", list = "<leader>il", run_all = "<leader>ia",
         cancel = "<leader>ic", help = "<leader>ik",
         history = "<leader>ih", env = "<leader>ie", response = "<leader>ir",
+        browser = "gx", -- open request URL in browser (vim.ui.open)
       },
       curl = { timeout = 30, insecure = false, max_redirects = 8,
              cookie_jar = true, compressed = true },

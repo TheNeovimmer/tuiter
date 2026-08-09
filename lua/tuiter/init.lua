@@ -21,6 +21,7 @@ local config = {
 		history = "<leader>ih",
 		env = "<leader>ie",
 		response = "<leader>ir", -- toggle response window
+		browser = "gx", -- open request URL in browser (vim.ui.open); false to disable
 	},
 	curl = { timeout = 30, insecure = false, max_redirects = 8, cookie_jar = true, compressed = true },
 	env_files = { "http-client.env.json", "tuiter.env.json" },
@@ -83,6 +84,7 @@ function M.resend(spec)
 	end
 	client.ensure_env(cwd, config)
 	spec.env = client.state.env
+	ui.mark_running(spec) -- instant in-flight feedback (replaced by the result mark)
 	vim.notify(string.format("Tuiter: %s %s", spec.method, spec.url), vim.log.levels.INFO, { title = "Tuiter" })
 	client.send(spec, config.curl, cwd, function(resp)
 		vim.schedule(function()
@@ -188,6 +190,7 @@ function M.run_all(opts)
 				in_flight = in_flight - 1
 				vim.defer_fn(pump, wait)
 			else
+				ui.mark_running(spec)
 				client.send(spec, config.curl, dir, function(resp)
 					vim.schedule(function()
 						client.record_response(resp, spec)
@@ -381,6 +384,10 @@ function M.setup_keymaps(buf)
 		map(km.run, function()
 			M.run({ buf = buf })
 		end, "Send request under cursor")
+		-- Insomnia / VS Code REST Client muscle memory: Enter sends
+		map("<CR>", function()
+			M.run({ buf = buf })
+		end, "Send request under cursor")
 	end
 	if km.list then
 		map(km.list, M.sidebar, "Request sidebar")
@@ -415,6 +422,14 @@ function M.setup_keymaps(buf)
 	map("[r", function()
 		M.jump_request(-1)
 	end, "Previous request")
+	if km.browser ~= false then
+		map(km.browser or "gx", function()
+			local _, spec = request_under_cursor({ buf = buf })
+			if spec and spec.url then
+				vim.ui.open(client.substitute(spec.url, spec.vars))
+			end
+		end, "Open request URL in browser")
+	end
 end
 
 -- ---------------------------------------------------------------------------

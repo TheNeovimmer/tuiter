@@ -126,7 +126,7 @@ Content-Type: application/json
 
 | Key | Action |
 |---|---|
-| `<leader>is` | Send request under cursor |
+| `<leader>is` / `<CR>` | Send request under cursor (Enter = Insomnia/REST Client muscle memory) |
 | `<leader>il` | Request sidebar (like Postman's collection list) |
 | `<leader>ia` | Run all requests in the file, show summary |
 | `<leader>ic` | Cancel in-flight requests |
@@ -135,6 +135,7 @@ Content-Type: application/json
 | `<leader>ie` | Select environment |
 | `<leader>ir` | Toggle response window |
 | `]r` / `[r` | Next / previous request |
+| `gx` | Open the request URL in your browser (`vim.ui.open`, vars resolved) |
 
 All keymaps are configurable — see [Configuration](#configuration). To
 skip one (or all), set it to `false` / pass `keymaps = false`.
@@ -166,7 +167,7 @@ Runs every request in the buffer sequentially and opens a summary float —
 ✓ green / ✗ red lines with method, name, status, time, size (⏭ grey lines
 for `# @skip` requests, which are not sent). `<CR>` on a line jumps to
 that request in the file. Requests also stamp their result as inline
-virtual text in the buffer.
+virtual text in the buffer (`✓ 200 · 45ms` / `✗ 404 · 12ms`).
 
 ### Response window
 
@@ -174,6 +175,12 @@ Insomnia-style: a tab bar (Body | Headers | Timeline) over the response,
 with a status bar showing `tuiter · METHOD URL · HTTP 200 OK · 123ms ·
 1.2KB · env: dev` (green when ok, red on error/4xx-5xx). The tab bar shows
 HTTP status · time · size on the right.
+
+While a request is in flight, its request line shows `↻ running…`; the
+mark is replaced by the ✓/✗ result when the response lands. Request
+failures (DNS, connection refused, timeout, cancel) are never silent: a
+warning toast fires, the status bar and Body tab show the curl error
+instead of an empty body, and the request line gets a `✗ error` mark.
 
 | Key | Action |
 |---|---|
@@ -504,6 +511,7 @@ switch with `:TuiterEnv` or `<leader>ie`.
       run = "<leader>is", list = "<leader>il", run_all = "<leader>ia",
       cancel = "<leader>ic", help = "<leader>ik",
       history = "<leader>ih", env = "<leader>ie", response = "<leader>ir",
+      browser = "gx", -- open request URL in browser (vim.ui.open)
     },
     curl = { timeout = 30, insecure = false, max_redirects = 8, cookie_jar = true, compressed = true },
     env_files = { "http-client.env.json", "tuiter.env.json" },
