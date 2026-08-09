@@ -1,0 +1,16 @@
+### Upload a file (multipart) — relative paths resolve against this file's dir
+# @name upload
+POST http://127.0.0.1:8999/users
+Content-Type: multipart/form-data
+
+name=ada
+role=admin
+avatar=@avatar.png
+
+### Upload with a {{var}} path — resolves from the request file's directory
+@asset = screenshots/hero.png
+POST http://127.0.0.1:8999/users
+Content-Type: multipart/form-data
+
+caption=release
+image=@{{asset}}

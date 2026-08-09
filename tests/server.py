@@ -19,6 +19,13 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path.startswith("/slow"):
             time.sleep(3)
+        if self.path.startswith("/protected"):
+            auth = self.headers.get("Authorization", "")
+            if auth == "Bearer rt_token":
+                self._reply(200, {"ok": True})
+            else:
+                self._reply(401, {"error": "unauthorized"})
+            return
         if self.path.startswith("/cookie"):
             self._reply(200, {"method": "GET", "path": self.path}, {"Set-Cookie": "tuiter_test=1; Path=/"})
             return
@@ -57,6 +64,14 @@ class Handler(BaseHTTPRequestHandler):
         self._reply(200, {"method": "GET", "path": self.path, "cookie": self.headers.get("Cookie")})
 
     def do_POST(self):
+        if self.path.startswith("/oauth-token"):
+            n = int(self.headers.get("Content-Length", 0))
+            form = self.rfile.read(n).decode()
+            if "grant_type=refresh_token" in form:
+                self._reply(200, {"access_token": "rt_token", "expires_in": 3600})
+            else:
+                self._reply(200, {"access_token": "cc_token", "refresh_token": "rt_1", "expires_in": 3600})
+            return
         if self.path.startswith("/token"):
             body = {"access_token": "oauth_token_123", "expires_in": 3600}
             if self.headers.get("Content-Type") == "application/json":
