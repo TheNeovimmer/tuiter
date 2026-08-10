@@ -1,1 +1,5 @@
 doc/tags
+# scratch dir used by the # @save example in examples/pro.http
+examples/out/
+# review/agent artifact dir
+.pi-subagents/

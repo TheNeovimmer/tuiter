@@ -90,6 +90,7 @@ function M.resend(spec)
 	client.send(spec, config.curl, cwd, function(resp)
 		vim.schedule(function()
 			client.record_response(resp, spec)
+			client.save_response(spec, resp)
 			ui.show(resp, spec, {
 				buf = spec.buf or M.source_buf,
 				windows = config.windows,
@@ -195,6 +196,7 @@ function M.run_all(opts)
 				client.send(spec, config.curl, dir, function(resp)
 					vim.schedule(function()
 						client.record_response(resp, spec)
+						client.save_response(spec, resp)
 						ui.mark_response(spec, resp)
 						results[i] = { spec = spec, resp = resp }
 						in_flight = in_flight - 1
@@ -447,7 +449,7 @@ function M.setup_keymaps(buf)
 		map(km.browser or "gx", function()
 			local _, spec = request_under_cursor({ buf = buf })
 			if spec and spec.url then
-				vim.ui.open(client.substitute(spec.url, spec.vars))
+				vim.ui.open(client.resolve_url(spec))
 			end
 		end, "Open request URL in browser")
 	end
@@ -504,6 +506,7 @@ function M.watch(opts)
 		client.send(spec, config.curl, dir, function(resp)
 			vim.schedule(function()
 				client.record_response(resp, spec)
+				client.save_response(spec, resp)
 				ui.mark(spec.url, resp.status)
 				if last == nil then
 					vim.notify(

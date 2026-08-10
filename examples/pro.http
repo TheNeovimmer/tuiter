@@ -1,5 +1,10 @@
 # Pro-feature examples: chaining, assertions, auth, streaming, pagination.
 # Requires the local test server: python3 tests/server.py
+#
+# # @base http://127.0.0.1:8999  — relative URLs (at the bottom of this file)
+# resolve against this prefix. Change one line to switch hosts.
+# # @save out/users.json        — response body is written to a file on send.
+# @base http://127.0.0.1:8999
 
 ### Login — named response used by later requests
 # @name login
@@ -34,6 +39,18 @@ GET http://127.0.0.1:8999/pages?n=0
 # @stream
 # @test body contains "n:0"
 GET http://127.0.0.1:8999/sse
+
+### Base URL + relative path + response export
+# @save out/users.json
+# @test status == 201
+POST /users
+Content-Type: application/json
+
+{"name": "ada"}
+
+### Base URL — relative GET
+# @test status == 200
+GET /api?x=1
 
 # Run all of these with <leader>ia; the summary shows ✓/✗ per test.
 # Export results: :TuiterJUnit  — CI: nvim --headless -c 'edit examples/pro.http' -c TuiterCI

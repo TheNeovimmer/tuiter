@@ -58,6 +58,7 @@ function M.add(spec, resp)
 			vars = spec.vars,
 			name = spec.name or "",
 			cwd = spec.cwd,
+			opts = spec.opts, -- keep # @base / # @save / # @timeout etc. on replay
 		},
 	}
 	-- dedupe consecutive identical requests: refresh the head entry instead

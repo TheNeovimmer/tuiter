@@ -213,6 +213,31 @@ Example — use a token from a login response: >
 Responses from single runs feed `{{$body.*}}`; the collection runner also
 records each response, so later requests can chain off earlier ones.
 
+BASE URLS AND RESPONSE EXPORT~
+
+`# @base https://api.example.com/v1` at the top of a .http file (or above a
+request) lets later requests use relative URLs: `GET /users` is resolved to
+`https://api.example.com/v1/users` at send time (the base may itself contain
+`{{vars}}`). Change one line to switch the whole file between dev and prod.>
+  # @base https://api.example.com/v1
+
+  ### List users
+  GET /users
+
+  ### Create user
+  POST /users
+  Content-Type: application/json
+
+  {"name": "ada"}
+<
+
+`# @save path.json` writes the response body to a file when the request
+lands (send, sidebar, or run-all). The path supports `{{vars}}` and resolves
+relative to the request file's directory; failed requests are not exported:>
+  # @save out/users-{{$timestamp}}.json
+  GET /users
+<
+
 ==============================================================================
 10. COMMANDS                                          *tuiter-commands*
 
@@ -245,9 +270,11 @@ Pro features, see README for the full guide: named request chaining
 auth (`# @auth oauth2 token_url=.. client_id=.. client_secret=..` — a 401
 auto-refreshes via the refresh grant whenever a refresh_token is
 available), streaming, pagination (`# @paginate`), .env support (hot-
-reloaded on disk changes), per-request `# @delay`, and secret redaction
-in history. In .http buffers `K` previews the resolved value of a {{var}}
-and `gd` jumps to its definition in the env file.
+reloaded on disk changes), per-request `# @delay`, base URLs (`# @base`),
+response export (`# @save`), env inheritance (`"$extends"` in the env JSON
+file), and secret redaction in history. In .http buffers `K` previews the
+resolved value of a {{var}} and `gd` jumps to its definition in the env
+file.
 
 ==============================================================================
 10a. GRAPHQL FILES                                     *tuiter-graphql*

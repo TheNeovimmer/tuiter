@@ -673,6 +673,117 @@ eq(v4, nil, "resolve unresolved nil")
 eq(client.substitute("x{{" .. "token}}y", {}), "xenv-tokeny", "substitute env")
 eq(client.substitute("{{nope_123}}", {}), "{{nope_123}}", "substitute unresolved kept")
 
+-- --- # @base: file-level URL prefix + relative URL resolution ---
+local reqsB = parser.parse_lines({
+	"# @base https://api.example.com/v1",
+	"",
+	"### List",
+	"GET /users",
+	"",
+	"### Detail",
+	"GET /users/{{id}}",
+})
+eq(reqsB[1].opts.base, "https://api.example.com/v1", "base inherited by first request")
+eq(reqsB[2].opts.base, "https://api.example.com/v1", "base inherited by later request")
+eq(client.resolve_url(reqsB[1]), "https://api.example.com/v1/users", "relative URL resolved")
+eq(client.resolve_url(reqsB[2]), "https://api.example.com/v1/users/{{id}}", "vars left for send-time substitution")
+reqsB[1].opts.base = "https://api.example.com/v1/"
+eq(client.resolve_url(reqsB[1]), "https://api.example.com/v1/users", "trailing slash on base normalized")
+local abs = parser.parse_lines({ "GET https://other.test/x" })[1]
+eq(client.resolve_url(abs), "https://other.test/x", "absolute URL untouched")
+local absv = parser.parse_lines({ "GET {{host}}/x" })[1]
+client.state.env_vars = { host = "https://env.test" }
+eq(client.resolve_url(absv), "https://env.test/x", "var-based absolute URL untouched by base")
+local ov = parser.parse_lines({
+	"# @base https://a.test",
+	"### Override",
+	"# @base https://b.test/v2",
+	"GET /x",
+	"### Inherit",
+	"GET /y",
+})
+eq(client.resolve_url(ov[1]), "https://b.test/v2/x", "per-request # @base override")
+eq(client.resolve_url(ov[2]), "https://b.test/v2/y", "base override cascades to later requests")
+local rb = parser.parse_lines({ "GET /users" })[1]
+eq(client.resolve_url(rb), "/users", "relative URL without base stays as-is")
+
+-- review fixes: colon/equals forms, base-in-body validation edge
+local colon = parser.parse_lines({ "### X", "# @base: https://c.test", "GET /x" })[1]
+eq(colon.opts.base, "https://c.test", "colon-form # @base: URL parses")
+local equals = parser.parse_lines({ "# @base = https://c.test", "### X", "GET /x" })[1]
+eq(equals.opts.base, "https://c.test", "equals-form file-level # @base = URL parses")
+local vb = parser.validate({
+	"### A",
+	"GET http://a.test",
+	"",
+	"# @base http://x.test", -- inside A's body: not a real base
+	"### B",
+	"GET /rel",
+})
+eq(#vb, 1, "# @base inside a body does not suppress the relative-URL diagnostic")
+
+-- validate: relative URLs are OK with a # @base, flagged without one
+local vB = parser.validate({ "# @base https://x.test", "", "GET /users" })
+eq(#vB, 0, "relative URL with base is valid")
+local vN = parser.validate({ "GET /users" })
+eq(#vN, 1, "relative URL without base flagged")
+eq(vN[1].msg:match("base") ~= nil, true, "diagnostic hints at # @base")
+
+-- --- $extends: env inheritance (Insomnia-style base env) ---
+local tmpdir = vim.fn.tempname()
+vim.fn.mkdir(tmpdir, "p")
+local tmpfile = tmpdir .. "/http-client.env.json"
+vim.fn.writefile({
+	vim.json.encode({
+		base = { host = "https://base.test", token = "t0" },
+		dev = { ["$extends"] = "base", token = "dev-token" },
+	}),
+}, tmpfile)
+local envopts = { env_files = { "http-client.env.json" } }
+client.set_env("dev", tmpdir, envopts)
+eq(client.state.env_vars.host, "https://base.test", "$extends: inherited var")
+eq(client.state.env_vars.token, "dev-token", "$extends: child wins on conflict")
+client.set_env("base", tmpdir, envopts)
+eq(client.state.env_vars.token, "t0", "$extends: base env alone works")
+local cyc = tmpdir .. "/cyc.json"
+vim.fn.writefile({ vim.json.encode({ a = { ["$extends"] = "b" }, b = { ["$extends"] = "a", x = 1 } }) }, cyc)
+client.set_env("a", tmpdir, { env_files = { "cyc.json" } })
+eq(client.state.env_vars.x, 1, "$extends: circular refs stop without hanging")
+os.remove(tmpfile)
+os.remove(cyc)
+os.remove(tmpdir)
+
+-- --- # @save: response body export ---
+local out = vim.fn.tempname()
+client.save_response({ opts = { save = out }, cwd = "/tmp" }, { ok = true, status = 200, body = '{"a":1}' })
+eq(
+	vim.wait(1000, function()
+		return vim.fn.filereadable(out) == 1
+	end, 50),
+	true,
+	"save_response wrote the file"
+)
+if vim.fn.filereadable(out) == 1 then
+	eq(table.concat(vim.fn.readfile(out), "\n"), '{"a":1}', "save_response content")
+	os.remove(out)
+end
+client.save_response({ opts = { save = out } }, { ok = false, status = 500, body = "boom" })
+eq(vim.fn.filereadable(out), 0, "failed request is not exported")
+client.save_response({ opts = {} }, { ok = true, body = "x" })
+-- a {{var}} in the save path resolves
+local varpath = vim.fn.tempname()
+client.save_response({ opts = { save = varpath .. "/{{$randomInt}}.json" }, cwd = "/tmp" }, { ok = true, body = "y" })
+local wrote = vim.wait(1000, function()
+	return #vim.fn.glob(varpath .. "/*.json", false, true) == 1
+end, 50)
+eq(wrote, true, "save path vars resolve")
+if wrote then
+	for _, f in ipairs(vim.fn.glob(varpath .. "/*.json", false, true)) do
+		os.remove(f)
+	end
+end
+os.remove(varpath)
+
 if failed == 0 then
 	print("ALL UNIT TESTS PASSED (incl. features)")
 else

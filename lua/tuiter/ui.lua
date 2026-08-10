@@ -502,7 +502,7 @@ function M.show(resp, spec, opts)
 	buf_map(body_buf, "gx", function()
 		local last = M.state.last
 		if last then
-			vim.ui.open(client.substitute(last.spec.url, last.spec.vars))
+			vim.ui.open(client.resolve_url(last.spec))
 		end
 	end, "Open request URL in browser")
 
@@ -639,7 +639,7 @@ function M.copy_url()
 	if not last then
 		return
 	end
-	local url = client.substitute(last.spec.url, last.spec.vars)
+	local url = client.resolve_url(last.spec)
 	vim.fn.setreg('"', last.spec.method .. " " .. url)
 	vim.notify("Tuiter: copied " .. last.spec.method .. " " .. url, vim.log.levels.INFO, { title = "Tuiter" })
 end
@@ -781,6 +781,7 @@ function M.vars_float(spec)
 		end
 	end
 	collect(spec.url)
+	collect(spec.opts and spec.opts.base or "") -- # @base may itself contain {{vars}}
 	for _, h in ipairs(spec.headers or {}) do
 		collect(h)
 	end
@@ -806,7 +807,7 @@ function M.vars_float(spec)
 			lines[#lines + 1] = ("{{" .. name .. "}} → %s (%s)"):format(value:gsub("[\r\n]+", "⏎"), source)
 		end
 	end
-	open_aux(string.format("resolved vars — %s %s", spec.method, trunc(spec.url, 40)), lines)
+	open_aux(string.format("resolved vars — %s %s", spec.method, trunc(client.resolve_url(spec), 40)), lines)
 end
 
 --- Diff the current response body against the previously shown response.
