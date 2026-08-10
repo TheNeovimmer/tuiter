@@ -29,6 +29,7 @@ function M.parse_lines(lines)
 	local requests = {}
 	local cur = nil
 	local in_body = false
+	local base = nil -- file-level `# @base` URL prefix (inherited by later requests)
 
 	local function start(line, i)
 		cur = {
@@ -40,6 +41,9 @@ function M.parse_lines(lines)
 			opts = {},
 			tests = {}, -- # @test assertions
 		}
+		if base then
+			cur.opts.base = base
+		end
 		local name = line:match("^###%s*(.*)$")
 		if name then
 			cur.name = name
@@ -53,11 +57,16 @@ function M.parse_lines(lines)
 		if line:match("^###") then
 			start(line, i)
 		elseif not cur then
-			-- implicit first request (no leading ###)
-			local m, u = line:match("^(%u+)%s+(%S+)")
-			if m then
-				start("", i)
-				cur.method, cur.url = m, u
+			-- implicit first request (no leading ###), or a file-level directive
+			local b = line:match("^#%s*@base%s*[=:]?%s*(.-)%s*$")
+			if b and b ~= "" then
+				base = b
+			else
+				local m, u = line:match("^(%u+)%s+(%S+)")
+				if m then
+					start("", i)
+					cur.method, cur.url = m, u
+				end
 			end
 		elseif in_body then
 			if cur.body == nil then
@@ -85,6 +94,11 @@ function M.parse_lines(lines)
 					if a then
 						cur.auth = a
 					end
+				elseif k == "base" then
+					-- a per-request # @base also becomes the file-level base
+					-- for every later request (strip a `# @base: url` colon)
+					base = v:gsub("^[=:]%s*", "")
+					cur.opts.base = base
 				else
 					cur.opts[k] = v == "" and true or v
 				end
@@ -124,10 +138,13 @@ end
 function M.validate(lines)
 	local issues = {}
 	local in_body = false
+	local has_base = false
 	for i, raw in ipairs(lines) do
 		local line = (raw or ""):gsub("\r$", "")
 		if line:match("^###") then
 			in_body = false
+		elseif not in_body and line:match("^#%s*@base") then
+			has_base = true
 		elseif line:match("^%s*$") then
 			in_body = true
 		elseif not line:match("^#") and not in_body and not line:match("^@") then
@@ -143,7 +160,12 @@ function M.validate(lines)
 						{ lnum = i, msg = "expected METHOD URL or Header: value (or a blank line before the body)" }
 				end
 			elseif not u:match("^https?://") and not u:match("^{{") then
-				issues[#issues + 1] = { lnum = i, msg = "URL '" .. u:sub(1, 40) .. "' does not start with http(s)://" }
+				if not has_base then
+					issues[#issues + 1] = {
+						lnum = i,
+						msg = "URL '" .. u:sub(1, 40) .. "' does not start with http(s):// (or add a # @base directive)",
+					}
+				end
 			end
 		end
 	end

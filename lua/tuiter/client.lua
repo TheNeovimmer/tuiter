@@ -67,6 +67,34 @@ function M.envs(dir, opts)
 	return names
 end
 
+--- Merge an env with its `$extends` base env (cycle-safe). dev/staging/prod
+--- inherit shared vars from a base env; the child wins on conflicts.
+---   { "base": { "host": "https://api.example.com" },
+---     "dev":  { "$extends": "base", "token": "dev-token" } }
+local function env_with_base(name, envs, seen)
+	if type(envs[name]) ~= "table" then
+		return {}
+	end
+	seen = seen or {}
+	if seen[name] then
+		return {} -- circular $extends: stop (don't loop forever)
+	end
+	seen[name] = true
+	local out = {}
+	local ext = envs[name]["$extends"]
+	if type(ext) == "string" and ext ~= name and type(envs[ext]) == "table" then
+		for k, v in pairs(env_with_base(ext, envs, seen)) do
+			out[k] = v
+		end
+	end
+	for k, v in pairs(envs[name]) do
+		if k ~= "$extends" then
+			out[k] = v
+		end
+	end
+	return out
+end
+
 function M.set_env(name, dir, opts)
 	local path = env_file_for(dir, opts)
 	local envs = path and read_env_file(path) or {}
@@ -75,7 +103,7 @@ function M.set_env(name, dir, opts)
 	for k, v in pairs(M.dotenv(dir)) do
 		vars[k] = v
 	end
-	for k, v in pairs(type(envs[name]) == "table" and envs[name] or {}) do
+	for k, v in pairs(env_with_base(name, envs)) do
 		vars[k] = v
 	end
 	M.state.env = name
@@ -346,6 +374,19 @@ function M.substitute(str, request_vars)
 			return "{{" .. name .. "}}"
 		end)
 	)
+end
+
+--- The final URL for a spec: a relative URL (`GET /users`) is resolved
+--- against the `# @base` prefix (vars substituted), then {{vars}} are
+--- replaced. Absolute URLs pass through unchanged. This is the single place
+--- a URL leaves tuiter (send, copy-as-curl, code snippets, gx, copy URL).
+function M.resolve_url(spec)
+	local url = spec.url or ""
+	local base = spec.opts and spec.opts.base
+	if base and base ~= "" and not url:match("^https?://") and not url:match("^{{") then
+		url = M.substitute(base, spec.vars):gsub("/+$", "") .. "/" .. url:gsub("^/+", "")
+	end
+	return M.substitute(url, spec.vars)
 end
 
 -- ---------------------------------------------------------------------------
@@ -714,7 +755,7 @@ function M.curl_args(spec, curl_opts, marker)
 			),
 		})
 	end
-	vim.list_extend(args, { M.substitute(spec.url, spec.vars) })
+	vim.list_extend(args, { M.resolve_url(spec) })
 	return args
 end
 
@@ -924,6 +965,35 @@ function M.cancel()
 		pcall(proc.kill, proc, 15) -- SIGTERM
 	end
 	M.state.procs = {}
+end
+
+--- # @save <path>: write the response body to a file when the request lands.
+--- The path supports {{vars}}; relative paths resolve against the request
+--- file's directory. No-op when the request has no # @save directive or
+--- failed to complete. Called from init.lua after record_response.
+function M.save_response(spec, resp)
+	local save = spec and spec.opts and spec.opts.save
+	if type(save) ~= "string" or save == "" or not resp or not resp.ok then
+		return
+	end
+	local path = M.substitute(save, spec.vars)
+	if spec.cwd and not path:match("^/") then
+		path = spec.cwd .. "/" .. path
+	end
+	-- vim.fn.* is illegal inside vim.system callbacks (E5560); defer the IO
+	-- to the main loop. Safe to call from an already-scheduled context too.
+	vim.schedule(function()
+		local dir = vim.fn.fnamemodify(path, ":h")
+		if dir ~= "" then
+			vim.fn.mkdir(dir, "p")
+		end
+		local ok, err = pcall(vim.fn.writefile, vim.split(resp.body or "", "\n", { plain = true }), path)
+		if ok then
+			vim.notify("Tuiter: saved response body to " .. path, vim.log.levels.INFO, { title = "Tuiter" })
+		else
+			vim.notify("Tuiter: failed to save " .. path .. ": " .. tostring(err), vim.log.levels.ERROR, { title = "Tuiter" })
+		end
+	end)
 end
 
 local function shq(s) -- single-quote for shell, escaping embedded quotes

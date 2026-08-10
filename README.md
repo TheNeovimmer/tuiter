@@ -30,6 +30,12 @@ Insomnia/Postman for your editor, written in pure Lua.
   (DevTools / docs / `gh api -i`) to `.http` via `:TuiterImportPostman` /
   `:TuiterImportOpenapi` / `:TuiterImportCurl`
 - **`.env` support** — `.env` vars are layered under the selected JSON environment
+- **Base URLs** — `# @base https://api.example.com/v1` at the top of a file; relative
+  URLs (`GET /users`) resolve against it, so switching dev/staging/prod is one line
+- **Environment inheritance** — a `"$extends": "base"` key makes dev/prod/staging
+  share a base environment (Insomnia-style)
+- **Response export** — `# @save path.json` writes the response body to a file on
+  every send / run-all (paths support `{{vars}}`)
 - **Requester tooling** — `:TuiterWatch` healthcheck, `:TuiterCI` headless run-all with exit code + JUnit, `:TuiterJUnit`, `:TuiterFormat`, `:TuiterScaffold`
 - **Response tooling** — diff against previous (`D`), jq filter (`J`), open in a tab (`o`), JSON key navigation (`]k`/`[k`), and a Tests tab (`4`)
 - **Picker integration** — Telescope extension (`history` / `requests` / `env`) plus `vim.ui.select` (LazyVim → snacks picker)
@@ -105,7 +111,17 @@ REST Client style, many requests per file:
 - Per-request directives: `# @timeout 5` (overrides `curl.timeout`), `# @no-redirect`
   (skip `-L`), `# @no-log` (don't record this request in history), `# @skip`
   (exclude from run-all / CI — destructive or flaky requests), `# @delay 500`
-  (wait N ms before sending; also paces run-all)
+  (wait N ms before sending; also paces run-all), `# @base URL` (file-level URL
+  prefix — see below), `# @save path` (write the response body to a file on send)
+- `# @base https://api.example.com/v1` at the top of the file (or above a
+  request) lets later requests use relative URLs: `GET /users` becomes
+  `https://api.example.com/v1/users` at send time. The base itself can contain
+  `{{vars}}`. Change the base line and every request in the file follows — no
+  more find-and-replace when you switch between dev and prod.
+- `# @save out/{{$timestamp}}.json` writes the response body to a file after the
+  request lands (send, sidebar `<CR>` or run-all). The path supports `{{vars}}`
+  and resolves relative to the request file's directory; failed requests are
+  not exported. Handy for dumping API output into a folder you can diff/watch.
 - `@name = value` lines define request-scoped variables (usable as `{{name}}`)
 - `multipart/form-data` bodies accept `key=@path` file fields — relative
   paths resolve against the request file's directory, and `{{vars}}` work
@@ -517,6 +533,21 @@ the selected environment, then shell env. Unresolved names stay visible.
 The file is searched upward from the request file's directory. The
 `default` environment (or first key) is picked automatically on first use;
 switch with `:TuiterEnv` or `<leader>ie`.
+
+Environments can inherit from a base environment — the `"$extends"` key
+merges that environment's vars underneath the child's (child wins on
+conflicts, cycles are ignored):
+
+```json
+{
+  "base": { "host": "https://api.example.com", "version": "v1" },
+  "dev":  { "$extends": "base", "token": "dev-token" },
+  "prod": { "$extends": "base", "token": "prod-token" }
+}
+```
+
+Now `dev` and `prod` share `host`/`version` and only differ on `token` —
+add a shared variable once in `base` instead of three times.
 
 ## Configuration
 

@@ -28,7 +28,7 @@ function M.generate(lang, spec, curl_opts)
 end
 
 local function prepare(spec)
-	local url = client.substitute(spec.url, spec.vars)
+	local url = client.resolve_url(spec)
 	local headers = {}
 	for k, v in pairs(spec.headers or {}) do
 		headers[k] = client.substitute(v, spec.vars)

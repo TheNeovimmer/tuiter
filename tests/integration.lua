@@ -397,6 +397,38 @@ assert(
 )
 eq(#table.concat(chunks, ""):match("data: %{n:0%}") ~= nil, true, "stream contains first event")
 
+-- # @save through the real resend path: body lands in the file
+local save_path = "/tmp/tuiter-save-e2e-" .. tostring(os.time()) .. ".json"
+require("tuiter").resend({
+	method = "GET",
+	url = "http://127.0.0.1:8999/api?x=1",
+	headers = {},
+	vars = {},
+	cwd = ".",
+	opts = { save = save_path },
+	no_log = true,
+})
+assert(
+	vim.wait(5000, function()
+		return vim.fn.filereadable(save_path) == 1
+	end, 50),
+	"# @save file was not written by resend"
+)
+eq(vim.json.decode(table.concat(vim.fn.readfile(save_path), "\n")).path == "/api?x=1", true, "# @save body content")
+os.remove(save_path)
+
+-- # @base through the real send path: relative URL resolved against base
+local base_spec = {
+	method = "GET",
+	url = "/api?x=1",
+	headers = {},
+	vars = {},
+	cwd = ".",
+	opts = { base = "http://127.0.0.1:8999" },
+}
+local url_eq = client.resolve_url(base_spec) == "http://127.0.0.1:8999/api?x=1"
+eq(url_eq, true, "resolve_url via real spec")
+
 server:kill()
 if failed == 0 then
 	print("ALL INTEGRATION TESTS PASSED")
