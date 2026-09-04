@@ -1,10 +1,10 @@
-# tuiter
+tuiter
+=====
 
-Interactive API explorer for Neovim. Write requests in `.http` files, send
-them with one key, read the response in a floating window — with a
-Postman-style request sidebar, collections runner, history, environments,
-dynamic variables, and JSON pretty-printing. A lightweight
-Insomnia/Postman for your editor, written in pure Lua.
+API explorer for Neovim. Write requests in `.http` files, send them with
+one key, read the response in a floating window — with a request sidebar,
+collections runner, history, environments, dynamic variables, and JSON
+pretty-printing. Pure Lua, zero deps, Neovim-native.
 
 ## Features
 
@@ -12,7 +12,7 @@ Insomnia/Postman for your editor, written in pure Lua.
 - **Syntax highlighting** — methods color-coded (GET green, POST blue, PUT/PATCH yellow, DELETE red), blue URLs, section titles, `@var`s, JSON bodies, `{{variables}}` — via `syntax/http.vim`
 - **Loading spinner** — animated braille spinner shows `⠋ GET https://api…` while a request is in flight
 - **Inline result marks** — every send stamps `✓ 200 · 45ms` / `✗ 404` as virtual text on the request line, so the file itself shows what passed and what didn't
-- **Request sidebar** — Postman-style list of every request; run, jump, favorite (`*`), filter (`/`), switch env (`e`), copy-as-curl; favorites separated from the rest with a divider
+- **Request sidebar** — list of every request; run, jump, favorite (`*`), filter (`/`), switch env (`e`), copy-as-curl; favorites separated from the rest with a divider
 - **Collection runner** — `<leader>ia` runs every request in the file and shows a ✓/✗ summary; `# @skip` requests are excluded (handy for destructive endpoints)
 - **Health check** — `:checkhealth tuiter` verifies Neovim, curl and the data/cookie dirs
 - **Async requests** — `curl` via `vim.system`, zero plugin dependencies; cancel hanging requests with `<leader>ic`
@@ -34,7 +34,7 @@ Insomnia/Postman for your editor, written in pure Lua.
 - **Base URLs** — `# @base https://api.example.com/v1` at the top of a file; relative
   URLs (`GET /users`) resolve against it, so switching dev/staging/prod is one line
 - **Environment inheritance** — a `"$extends": "base"` key makes dev/prod/staging
-  share a base environment (Insomnia-style)
+  share a base environment (e.g. dev inherits from base)
 - **Response export** — `# @save path.json` writes the response body to a file on
   every send / run-all (paths support `{{vars}}`)
 - **Requester tooling** — `:TuiterWatch` healthcheck, `:TuiterCI` headless run-all with exit code + JUnit, `:TuiterJUnit`, `:TuiterFormat`, `:TuiterScaffold`
@@ -166,8 +166,8 @@ Scripts run in a sandboxed `load()` — no filesystem or network access.
 
 | Key | Action |
 |---|---|
-| `<leader>is` / `<CR>` | Send request under cursor (Enter = Insomnia/REST Client muscle memory) |
-| `<leader>il` | Request sidebar (like Postman's collection list) |
+| `<leader>is` / `<CR>` | Send request under cursor |
+| `<leader>il` | Request sidebar |
 | `<leader>ia` | Run all requests in the file, show summary |
 | `<leader>ic` | Cancel in-flight requests |
 | `<leader>ik` | Keymap help float |
@@ -196,7 +196,7 @@ DELETE red), name, URL, and the last response status with icons
 | `<CR>` | Run request (sidebar stays open — response opens to its right) |
 | `g` | Jump to the request in the file |
 | `*` | Toggle favorite (persisted) |
-| `/` | Filter requests by name/URL/method (Insomnia-style search) |
+| `/` | Filter requests by name/URL/method |
 | `e` | Switch environment (sidebar re-renders) |
 | `a` | Run all requests |
 | `c` | Copy as curl |
@@ -213,8 +213,7 @@ virtual text in the buffer (`✓ 200 · 45ms` / `✗ 404 · 12ms`).
 
 ### Response window
 
-Insomnia-style: a tab bar (`● GET  body │ headers │ timeline │ tests    200  45ms · 1.2KB`) over the
-response, with a statusline showing `METHOD url  200  45ms · 1.2KB · json · dev │ q quit │ 1-4 tabs │ p pretty │ y copy │ r retry │ D diff`
+The tab bar sits above the response: `● GET  body │ headers │ timeline │ tests    200  45ms · 1.2KB`, with a statusline showing `METHOD url  200  45ms · 1.2KB · json · dev │ q quit │ 1-4 tabs │ p pretty │ y copy │ r retry │ D diff`
 (method color-coded, status badge with colored background). In float mode
 the tab bar is a separate window; in split mode it is the first line of the
 response buffer.
@@ -239,7 +238,7 @@ full content.
 | `y` | Copy current tab (body, headers, timeline, or tests) |
 | `/` | Search in response (vim `/`) |
 | `A` | Toggle show-all for truncated >200KB bodies |
-| `c` | Copy as curl command (Insomnia-style) |
+| `c` | Copy as curl command |
 | `C` | Copy as code snippet (picker) |
 | `f` | Save body to a file (`:TuiterSaveBody`) |
 | `z` | Zoom: response fills the screen (tab bar hidden) |
@@ -288,7 +287,7 @@ send.
 | `{{$randomEmail}}` | Random `…@example.com` address |
 | `{{$status}}` | Status code of the last response |
 | `{{$body}}` | Raw (unparsed) last response body |
-| `{{$body.a.b.0.c}}` | Dotted path into the last response's JSON body (array indexes are 0-based, like Insomnia) |
+| `{{$body.a.b.0.c}}` | Dotted path into the last response's JSON body (array indexes are 0-based) |
 
 ```http
 ### Login — store a token
@@ -423,19 +422,6 @@ without switching environments.
   seconds, notifying on status changes (toggle again to stop)
 - `:TuiterFormat` — pretty-print the JSON body of the request under the cursor
 - `:TuiterScaffold` — new `.http` buffer with tests/auth/formatting examples
-
-### Insomnia / Postman mapping
-
-| Insomnia | tuiter |
-|---|---|
-| Send (`Ctrl+Enter`) | `<leader>is` or `<CR>` in sidebar |
-| Collection sidebar | `<leader>il` |
-| Environment selector | `<leader>ie` |
-| Recent requests | `<leader>ih` |
-| Copy as curl | `c` in response window |
-| Request chain (`response.body…`) | `{{$body.path}}` |
-| Dynamic values (`$timestamp`…) | `{{$timestamp}}` etc. |
-| Pre/post scripts | `# @before` / `# @after` |
 
 ### Commands
 
@@ -618,8 +604,7 @@ Quick for spot-checking — `is` sends, response pops up, `q` dismisses.
 
 **`layout = "split"`**: sidebar opens as a real `topleft vsplit` with
 `winfixwidth`; response opens as a `botright vsplit`. The 3-pane layout
-([.http] [sidebar] [response]) stays visible while you edit — like Postman
-inside Neovim. Use `<leader>ir` to toggle the response split, `q` inside it
+([.http] [sidebar] [response]) stays visible while you edit. Use `<leader>ir` to toggle the response split, `q` inside it
 to close. The sidebar width is controlled by `windows.sidebar_width` (default
 62); the response width by `windows.width` (default 120).
 
