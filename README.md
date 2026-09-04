@@ -13,6 +13,10 @@ pretty-printing. Pure Lua, zero deps, Neovim-native.
 - **Loading spinner** — animated braille spinner shows `⠋ GET https://api…` while a request is in flight
 - **Inline result marks** — every send stamps `✓ 200 · 45ms` / `✗ 404` as virtual text on the request line, so the file itself shows what passed and what didn't
 - **Request sidebar** — list of every request; run, jump, favorite (`*`), filter (`/`), switch env (`e`), copy-as-curl; favorites separated from the rest with a divider
+- **Collections** — organize requests in `*.http.collections/` directories; create, add files, list collections with `:TuiterCollection`
+- **Templates** — save and reuse request patterns; 10 built-in templates (GET, POST, PUT, DELETE, auth, pagination, GraphQL, etc.); `:TuiterSnippet` to list/save/insert
+- **Request tags** — `# @tag auth,breaking,slow` for filtering; use `tag:auth` in sidebar filter
+- **Collection env files** — `collection.env.json` in collection directories overrides root env files
 - **Collection runner** — `<leader>ia` runs every request in the file and shows a ✓/✗ summary; `# @skip` requests are excluded (handy for destructive endpoints)
 - **Health check** — `:checkhealth tuiter` verifies Neovim, curl and the data/cookie dirs
 - **Async requests** — `curl` via `vim.system`, zero plugin dependencies; cancel hanging requests with `<leader>ic`
@@ -64,7 +68,7 @@ pretty-printing. Pure Lua, zero deps, Neovim-native.
   "TheNeovimmer/tuiter",
   branch = "main",
   dependencies = {}, -- zero plugin dependencies: pure Lua + curl only
-  cmd = { "Tuiter", "TuiterRun", "TuiterRunAll", "TuiterCancel", "TuiterSaveBody", "TuiterHistory", "TuiterEnv", "TuiterResponse", "TuiterCopyAs", "TuiterStream", "TuiterWatch", "TuiterJUnit", "TuiterCI", "TuiterScaffold", "TuiterFormat", "TuiterImportPostman", "TuiterImportOpenapi", "TuiterImportCurl" },
+  cmd = { "Tuiter", "TuiterRun", "TuiterRunAll", "TuiterCancel", "TuiterSaveBody", "TuiterHistory", "TuiterEnv", "TuiterResponse", "TuiterCopyAs", "TuiterStream", "TuiterWatch", "TuiterJUnit", "TuiterCI", "TuiterScaffold", "TuiterFormat", "TuiterImportPostman", "TuiterImportOpenapi", "TuiterImportCurl", "TuiterCollection", "TuiterSnippet" },
   ft = { "http", "graphql" },
   opts = {},
 }
@@ -445,12 +449,58 @@ without switching environments.
 | `:TuiterImportPostman [file]` | Convert a Postman collection to a `.http` buffer |
 | `:TuiterImportOpenapi [file]` | Convert an OpenAPI spec to a `.http` buffer |
 | `:TuiterImportCurl` | Paste a curl command → new `.http` buffer |
+| `:TuiterCollection [new\|add\|list]` | Manage request collections (new creates, add adds current file, list shows all) |
+| `:TuiterSnippet [list\|save\|insert]` | Manage request templates (list shows all, save saves current request, insert inserts template) |
 
 ## Health check
 
 `:checkhealth tuiter` verifies Neovim >= 0.10, `curl` on PATH, and that the
 data + cookie-jar directories under `stdpath("data")/tuiter` are writable
 (plus an info note when `jq` is missing for the `J` filter).
+
+## Collections & Templates
+
+### Collections
+
+Organize requests in `*.http.collections/` directories. Collections are
+git-friendly and can have their own env files.
+
+```sh
+:TuiterCollection new my-api    # create my-api.http.collections/
+:TuiterCollection add           # add current file to a collection (picker)
+:TuiterCollection list          # list all collections (picker)
+```
+
+Collection-specific env files (`collection.env.json`) override root-level
+env files when working within a collection.
+
+### Templates
+
+Save and reuse request patterns. Built-in templates include GET, POST,
+PUT, DELETE, auth, pagination, GraphQL, health check, and login flow.
+
+```sh
+:TuiterSnippet list             # show all templates (built-in + saved)
+:TuiterSnippet save my-template # save current request as template
+:TuiterSnippet insert           # insert a template at cursor (picker)
+```
+
+Templates support `{{cursor}}` placeholder for jump position after insertion.
+
+## Request tags
+
+Tag requests for filtering:
+
+```http
+### Login
+# @tag auth,critical
+POST https://api.example.com/login
+Content-Type: application/json
+
+{"email": "user@example.com", "password": "secret"}
+```
+
+Filter by tag in the sidebar: `tag:auth` shows only requests tagged with "auth".
 
 ## GraphQL support
 
@@ -639,6 +689,8 @@ lua/tuiter/ui.lua        response windows + request sidebar + run summary + stre
                          + loading spinner + method-colored badges + split mode
 lua/tuiter/history.lua   persisted request history (secrets redacted)
 lua/tuiter/pickers.lua   Telescope picker providers
+lua/tuiter/collections.lua  collection management (create, add, list)
+lua/tuiter/templates.lua    request template management (built-in + saved)
 lua/telescope/_extensions/tuiter.lua  Telescope extension registration
 syntax/http.vim          .http syntax highlighting (methods, URLs, headers, JSON)
 ```

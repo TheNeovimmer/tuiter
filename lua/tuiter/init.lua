@@ -6,6 +6,8 @@ local client = require("tuiter.client")
 local ui = require("tuiter.ui")
 local history = require("tuiter.history")
 local codegen = require("tuiter.codegen")
+local collections = require("tuiter.collections")
+local templates = require("tuiter.templates")
 
 local M = {}
 
@@ -760,6 +762,169 @@ end
 --- The active env file path (for `gd` definition-jumping).
 function M.env_file()
 	return client.state.env_file
+end
+
+-- ---------------------------------------------------------------------------
+-- Collections & Templates
+-- ---------------------------------------------------------------------------
+
+--- Create a new collection. `:TuiterCollection new <name>`.
+---@param name? string
+function M.collection_new(name)
+	if not name or name == "" then
+		vim.ui.input({ prompt = "Collection name:" }, function(n)
+			if n and n ~= "" then
+				M.collection_new(n)
+			end
+		end)
+		return
+	end
+	local path, err = collections.create(name)
+	if err then
+		vim.notify("Tuiter: " .. err, vim.log.levels.ERROR, { title = "Tuiter" })
+		return
+	end
+	vim.notify("Tuiter: created collection " .. name, vim.log.levels.INFO, { title = "Tuiter" })
+end
+
+--- Add current file to a collection. `:TuiterCollection add [collection]`.
+---@param collection_name? string
+function M.collection_add(collection_name)
+	local file = vim.api.nvim_buf_get_name(0)
+	if file == "" then
+		vim.notify("Tuiter: no file to add", vim.log.levels.WARN, { title = "Tuiter" })
+		return
+	end
+	if not collection_name or collection_name == "" then
+		-- Show picker with existing collections
+		local cols = collections.list_collections(vim.fn.getcwd())
+		if #cols == 0 then
+			vim.notify("Tuiter: no collections found", vim.log.levels.WARN, { title = "Tuiter" })
+			return
+		end
+		vim.ui.select(cols, {
+			prompt = "Add to collection",
+			format_item = function(c)
+				return c.name .. " (" .. #c.files .. " files)"
+			end,
+		}, function(choice)
+			if choice then
+				local ok, err = collections.add_file(file, choice.path)
+				if err then
+					vim.notify("Tuiter: " .. err, vim.log.levels.ERROR, { title = "Tuiter" })
+				else
+					vim.notify("Tuiter: added to " .. choice.name, vim.log.levels.INFO, { title = "Tuiter" })
+				end
+			end
+		end)
+		return
+	end
+	-- Find collection by name
+	local cols = collections.list_collections(vim.fn.getcwd())
+	for _, c in ipairs(cols) do
+		if c.name == collection_name then
+			local ok, err = collections.add_file(file, c.path)
+			if err then
+				vim.notify("Tuiter: " .. err, vim.log.levels.ERROR, { title = "Tuiter" })
+			else
+				vim.notify("Tuiter: added to " .. c.name, vim.log.levels.INFO, { title = "Tuiter" })
+			end
+			return
+		end
+	end
+	vim.notify("Tuiter: collection not found: " .. collection_name, vim.log.levels.ERROR, { title = "Tuiter" })
+end
+
+--- List all collections. `:TuiterCollection list`.
+function M.collection_list()
+	local cols = collections.list_collections(vim.fn.getcwd())
+	if #cols == 0 then
+		vim.notify("Tuiter: no collections found", vim.log.levels.WARN, { title = "Tuiter" })
+		return
+	end
+	-- Show in telescope or fallback to vim.ui.select
+	local items = {}
+	for _, c in ipairs(cols) do
+		table.insert(items, {
+			name = c.name,
+			path = c.path,
+			file_count = #c.files,
+			files = c.files,
+		})
+	end
+	vim.ui.select(items, {
+		prompt = "Collections",
+		format_item = function(c)
+			return c.name .. " (" .. c.file_count .. " files)"
+		end,
+	}, function(choice)
+		if choice then
+			-- Open first file in collection
+			if #choice.files > 0 then
+				vim.cmd("edit " .. vim.fn.fnameescape(choice.files[1].path))
+			end
+		end
+	end)
+end
+
+--- List all templates (built-in + saved). `:TuiterSnippet list`.
+function M.snippet_list()
+	local all = templates.all()
+	vim.ui.select(all, {
+		prompt = "Templates",
+		format_item = function(t)
+			return t.method .. " " .. t.name
+		end,
+	}, function(choice)
+		if choice then
+			templates.insert(choice.name)
+		end
+	end)
+end
+
+--- Save current request as a template. `:TuiterSnippet save [name]`.
+---@param name? string
+function M.snippet_save(name)
+	local buf, spec = request_under_cursor()
+	if not spec then
+		vim.notify("Tuiter: no request under cursor", vim.log.levels.WARN, { title = "Tuiter" })
+		return
+	end
+	if not name or name == "" then
+		vim.ui.input({ prompt = "Template name:" }, function(n)
+			if n and n ~= "" then
+				M.snippet_save(n)
+			end
+		end)
+		return
+	end
+	-- Get the request lines from the buffer
+	local lines = {}
+	if spec.heading_line then
+		lines = vim.api.nvim_buf_get_lines(buf, spec.heading_line - 1, spec.body_end or -1, false)
+	else
+		lines = vim.api.nvim_buf_get_lines(buf, spec.line - 1, spec.body_end or -1, false)
+	end
+	local content = table.concat(lines, "\n")
+	local ok, err = templates.save(name, content, "", spec.method)
+	if err then
+		vim.notify("Tuiter: " .. err, vim.log.levels.ERROR, { title = "Tuiter" })
+	else
+		vim.notify("Tuiter: saved template " .. name, vim.log.levels.INFO, { title = "Tuiter" })
+	end
+end
+
+--- Insert a template at cursor. `:TuiterSnippet insert <name>`.
+---@param name? string
+function M.snippet_insert(name)
+	if not name or name == "" then
+		M.snippet_list()
+		return
+	end
+	local ok, err = templates.insert(name)
+	if err then
+		vim.notify("Tuiter: " .. err, vim.log.levels.ERROR, { title = "Tuiter" })
+	end
 end
 
 return M

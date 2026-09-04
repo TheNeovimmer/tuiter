@@ -1502,6 +1502,18 @@ local function matches_filter(r, f)
 	if f == "" then
 		return true
 	end
+	-- Support tag: prefix for filtering by tags
+	if f:lower():find("^tag:") then
+		local tag_filter = f:sub(5):lower()
+		local collections = require("tuiter.collections")
+		local tags = collections.parse_tags(r)
+		for _, tag in ipairs(tags) do
+			if tag:lower():find(tag_filter, 1, true) then
+				return true
+			end
+		end
+		return false
+	end
 	local hay = (r.method .. " " .. r.name .. " " .. r.url):lower()
 	return hay:find(f:lower(), 1, true) ~= nil
 end

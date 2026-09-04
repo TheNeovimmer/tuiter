@@ -32,10 +32,21 @@ local function jar_path(cwd)
 end
 
 --- Walk up from `dir` looking for the first existing env file.
+--- Also checks for collection.env.json in the collection directory.
 local function env_file_for(dir, opts)
 	local d = dir
 	local prev = nil
 	while d and d ~= prev do
+		-- Check for collection.env.json first
+		local collections = require("tuiter.collections")
+		local collection_root = collections.find_collection(d)
+		if collection_root then
+			local collection_env = collections.env_file(collection_root)
+			if vim.fn.filereadable(collection_env) == 1 then
+				return collection_env
+			end
+		end
+		-- Check standard env files
 		for _, f in ipairs(opts.env_files or {}) do
 			local p = d .. "/" .. f
 			if vim.fn.filereadable(p) == 1 then

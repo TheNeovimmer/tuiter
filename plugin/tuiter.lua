@@ -99,3 +99,55 @@ end, { desc = "Show the resolved values of every {{var}} in the request under th
 vim.api.nvim_create_user_command("TuiterImportCurl", function()
 	require("tuiter").import_curl()
 end, { desc = "Paste a curl command (DevTools / docs / gh api -i) and convert it to a .http buffer" })
+
+vim.api.nvim_create_user_command("TuiterCollection", function(a)
+	local parts = vim.split(a.args, "%s+")
+	local subcmd = parts[1]
+	if subcmd == "new" then
+		require("tuiter").collection_new(parts[2])
+	elseif subcmd == "add" then
+		require("tuiter").collection_add(parts[2])
+	elseif subcmd == "list" then
+		require("tuiter").collection_list()
+	else
+		require("tuiter").collection_list()
+	end
+end, {
+	nargs = "*",
+	complete = function(arg_lead, cmd_line, cursor_pos)
+		local parts = vim.split(cmd_line, "%s+")
+		if #parts <= 2 then
+			return vim.tbl_filter(function(v)
+				return v:find(arg_lead, 1, true) == 1
+			end, { "new", "add", "list" })
+		end
+		return {}
+	end,
+	desc = "Manage request collections (new/add/list)",
+})
+
+vim.api.nvim_create_user_command("TuiterSnippet", function(a)
+	local parts = vim.split(a.args, "%s+")
+	local subcmd = parts[1]
+	if subcmd == "save" then
+		require("tuiter").snippet_save(parts[2])
+	elseif subcmd == "insert" then
+		require("tuiter").snippet_insert(parts[2])
+	elseif subcmd == "list" then
+		require("tuiter").snippet_list()
+	else
+		require("tuiter").snippet_list()
+	end
+end, {
+	nargs = "*",
+	complete = function(arg_lead, cmd_line, cursor_pos)
+		local parts = vim.split(cmd_line, "%s+")
+		if #parts <= 2 then
+			return vim.tbl_filter(function(v)
+				return v:find(arg_lead, 1, true) == 1
+			end, { "list", "save", "insert" })
+		end
+		return {}
+	end,
+	desc = "Manage request templates (list/save/insert)",
+})
