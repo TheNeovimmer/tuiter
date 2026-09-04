@@ -9,16 +9,17 @@ Insomnia/Postman for your editor, written in pure Lua.
 ## Features
 
 - **`.http` request files** — REST Client format: methods, headers, bodies, named `###` sections, `# @name`
-- **Insomnia-style composer** — methods color-coded in the file itself, blue URLs, section titles, `@var`s
+- **Syntax highlighting** — methods color-coded (GET green, POST blue, PUT/PATCH yellow, DELETE red), blue URLs, section titles, `@var`s, JSON bodies, `{{variables}}` — via `syntax/http.vim`
+- **Loading spinner** — animated braille spinner shows `⠋ GET https://api…` while a request is in flight
 - **Inline result marks** — every send stamps `✓ 200 · 45ms` / `✗ 404` as virtual text on the request line, so the file itself shows what passed and what didn't
-- **Request sidebar** — Postman-style list of every request; run, jump, favorite (`*`), filter (`/`), switch env (`e`), copy-as-curl
+- **Request sidebar** — Postman-style list of every request; run, jump, favorite (`*`), filter (`/`), switch env (`e`), copy-as-curl; favorites separated from the rest with a divider
 - **Collection runner** — `<leader>ia` runs every request in the file and shows a ✓/✗ summary; `# @skip` requests are excluded (handy for destructive endpoints)
 - **Health check** — `:checkhealth tuiter` verifies Neovim, curl and the data/cookie dirs
 - **Async requests** — `curl` via `vim.system`, zero plugin dependencies; cancel hanging requests with `<leader>ic`
-- **Response viewer with tabs** — Body / Headers / Timeline, like Insomnia's response pane
+- **Response viewer with tabs** — Body / Headers / Timeline / Tests, with colored status badges (` 200 ` green, ` 404 ` red) and method-colored tab bar
 - **Timeline tab** — per-phase timing breakdown (DNS, TCP, TLS, TTFB, download) from curl
-- **Status bar** — HTTP code · time · size · env, green/red, in every response window
-- **Inline result marks** — after a send, the request line in the `.http` file shows `✓ 200 · 45ms` as virtual text (red on error / failed assertions)
+- **Status bar** — method (color-coded) · url · status badge · time · size · encoding · content-type · env · key hints — a dense, sectioned statusline
+- **Pre/post request scripts** — `# @before` / `# @after` Lua snippets that run before/after each request; can modify headers, read response, set env vars
 - **Dynamic variables** — `{{$timestamp}}`, `{{$uuid}}`, `{{$randomInt}}`, … and response chaining via `{{$body.path.to.field}}`
 - **Named request chaining** — reference any earlier request by name: `{{login.body.token}}`, `{{login.status}}`
 - **Assertions / tests** — `# @test status == 200` per request, checked in the run summary + exported to JUnit JSON
@@ -37,7 +38,7 @@ Insomnia/Postman for your editor, written in pure Lua.
 - **Response export** — `# @save path.json` writes the response body to a file on
   every send / run-all (paths support `{{vars}}`)
 - **Requester tooling** — `:TuiterWatch` healthcheck, `:TuiterCI` headless run-all with exit code + JUnit, `:TuiterJUnit`, `:TuiterFormat`, `:TuiterScaffold`
-- **Response tooling** — diff against previous (`D`), jq filter (`J`), open in a tab (`o`), JSON key navigation (`]k`/`[k`), and a Tests tab (`4`)
+- **Response tooling** — diff against previous (`D`), jq filter (`J`), open in a tab (`o`), JSON key navigation (`]k`/`[k`), search (`/`), expand truncated bodies (`A`), and a Tests tab (`4`)
 - **Picker integration** — Telescope extension (`history` / `requests` / `env`) plus `vim.ui.select` (LazyVim → snacks picker)
 - **Per-request curl directives** — `# @cert`, `# @key`, `# @proxy`, `# @insecure`
 - **Secret redaction** — Authorization / Cookie / API-key header values are never written to history
@@ -113,6 +114,10 @@ REST Client style, many requests per file:
   (exclude from run-all / CI — destructive or flaky requests), `# @delay 500`
   (wait N ms before sending; also paces run-all), `# @base URL` (file-level URL
   prefix — see below), `# @save path` (write the response body to a file on send)
+- Pre/post scripts: `# @before <lua-code>` runs before the request is sent
+  (can modify headers, vars via `set_header()`, `set_var()`, `set_env()`),
+  `# @after <lua-code>` runs after the response arrives (can inspect `response`,
+  `status`, `body`, `json()`). Aliases: `# @lua_pre`, `# @lua_post`.
 - `# @base https://api.example.com/v1` at the top of the file (or above a
   request) lets later requests use relative URLs: `GET /users` becomes
   `https://api.example.com/v1/users` at send time. The base itself can contain
@@ -138,6 +143,25 @@ Content-Type: application/json
 {"user": "ada"}
 ```
 
+### Pre/post scripts
+
+Run Lua code before or after a request — useful for dynamic auth, logging,
+or chaining logic that the directive system can't express:
+
+```http
+### Create user and store the ID
+# @before set_header("X-Request-ID", "{{$uuid}}")
+# @after local id = json(body).id; set_env("user_id", tostring(id))
+POST https://api.example.com/users
+Content-Type: application/json
+
+{"name": "ada"}
+```
+
+Available in the script environment: `request`, `response`, `status`, `body`,
+`json(str)`, `set_header(k, v)`, `set_var(k, v)`, `set_env(k, v)`, `print()`.
+Scripts run in a sandboxed `load()` — no filesystem or network access.
+
 ### Keymaps (`.http` files, `<leader>i` group)
 
 | Key | Action |
@@ -162,10 +186,10 @@ env vars, dynamic values).
 
 ### Request sidebar (`<leader>il` / `:Tuiter`)
 
-Lists every request in the file — ★ favorites first, method
-(color-coded: GET green, POST blue, PUT/PATCH yellow, DELETE red), name,
-URL, and the last response status (`[200 · 45ms]`/`[404 · 12ms]`/`[✗ error]`
-marks).
+Lists every request in the file — ★ favorites first (separated by a
+divider), method (color-coded: GET green, POST blue, PUT/PATCH yellow,
+DELETE red), name, URL, and the last response status with icons
+(` ✓ 200 45ms` / ` ✗ 12ms` / ` ✗ error` marks).
 
 | Key | Action |
 |---|---|
@@ -189,20 +213,21 @@ virtual text in the buffer (`✓ 200 · 45ms` / `✗ 404 · 12ms`).
 
 ### Response window
 
-Insomnia-style: a tab bar (Body | Headers | Timeline | Tests) over the
-response, with a status line showing `METHOD URL · HTTP 200 OK · 123ms ·
-1.2KB · env: dev` (green when ok, red on error/4xx-5xx). In float mode the
-tab bar is a separate window; in split mode it is the first line of the
+Insomnia-style: a tab bar (`● GET  body │ headers │ timeline │ tests    200  45ms · 1.2KB`) over the
+response, with a statusline showing `METHOD url  200  45ms · 1.2KB · json · dev │ q quit │ 1-4 tabs │ p pretty │ y copy │ r retry │ D diff`
+(method color-coded, status badge with colored background). In float mode
+the tab bar is a separate window; in split mode it is the first line of the
 response buffer.
 
-While a request is in flight, its request line shows `↻ running…`; the
-mark is replaced by the ✓/✗ result when the response lands. Request
+While a request is in flight, a loading spinner floats at the bottom-right
+showing `⠋ GET https://api…` with an animated braille character. The
+spinner is dismissed automatically when the response arrives. Request
 failures (DNS, connection refused, timeout, cancel) are never silent: a
 warning toast fires, the status bar and Body tab show the curl error
 instead of an empty body, and the request line gets a `✗ error` mark.
 
 Response bodies over 200KB are truncated in the body tab with a
-`[show-all]` note — use `p` (pretty/raw) or `o` (open in tab) to see the
+`[show-all]` note — press `A` to expand, `p` (pretty/raw) or `o` (open in tab) to see the
 full content.
 
 | Key | Action |
@@ -212,6 +237,8 @@ full content.
 | `q` | Close response |
 | `p` | Toggle pretty / raw JSON body |
 | `y` | Copy current tab (body, headers, timeline, or tests) |
+| `/` | Search in response (vim `/`) |
+| `A` | Toggle show-all for truncated >200KB bodies |
 | `c` | Copy as curl command (Insomnia-style) |
 | `C` | Copy as code snippet (picker) |
 | `f` | Save body to a file (`:TuiterSaveBody`) |
@@ -408,6 +435,7 @@ without switching environments.
 | Copy as curl | `c` in response window |
 | Request chain (`response.body…`) | `{{$body.path}}` |
 | Dynamic values (`$timestamp`…) | `{{$timestamp}}` etc. |
+| Pre/post scripts | `# @before` / `# @after` |
 
 ### Commands
 
@@ -478,8 +506,9 @@ environment and last response — drop it into lualine or a custom statusline:
 { "tuiter.statusline", cond = function() return require("tuiter").statusline() ~= "" end }
 ```
 
-The response window statusline shows `METHOD url · HTTP code reason · time · size · env`
-(green when ok, red on error/4xx-5xx) in a single dense line.
+The response window statusline shows `METHOD url  200  45ms · 1.2KB · json · dev │ key hints`
+(method color-coded, status badge with colored background) in a single
+dense line.
 
 ## How it works
 
@@ -487,17 +516,18 @@ The response window statusline shows `METHOD url · HTTP code reason · time · 
 <leader>is on a .http file
       │
       ▼
-parser.lua        parse buffer → request spec {method, url, headers, body, vars}
+parser.lua        parse buffer → request spec {method, url, headers, body, vars, scripts}
       │
       ▼
-client.lua        substitute {{vars}} + {{$dynamic}} → curl_args() → vim.system(curl, async)
-      │
+client.lua        substitute {{vars}} + {{$dynamic}} → run # @before → curl_args()
+      │           → vim.system(curl, async) → run # @after
       ▼
 client.lua        parse_response() splits headers/body + status/time/size
       │  (vim.schedule — curl callbacks fire in a fast-event context,
       │   deferred to the main loop before touching windows)
       ▼
-ui.lua            show(): pretty-print JSON → treesitter json → floats + status bar
+ui.lua            show(): loading spinner → pretty-print JSON → treesitter json →
+                  floats/splits + status bar + method-colored badges
 history.lua       append to stdpath("data")/tuiter/history.json
 ```
 
@@ -521,7 +551,7 @@ require("tuiter").select_env({ cwd })    -- choose environment
 require("tuiter").toggle_response()      -- show/hide response window
 require("tuiter").close_response()
 require("tuiter").copy_as("python")       -- copy snippet for the request under cursor
-require("tuiter").statusline()           -- "env: dev · HTTP 200" for lualine
+require("tuiter").statusline()           -- "dev · HTTP 200" for lualine
 ```
 
 ## Environment variables
@@ -608,22 +638,24 @@ make lint   # stylua --check
 Structure:
 
 ```
-plugin/tuiter.lua      commands + filetype detection
-ftplugin/http.lua      buffer keymaps + commentstring + omnifunc + diagnostics
-                       + {{var}} hover (K) and definition jump (gd)
-ftplugin/graphql.lua   same for .graphql buffers
-lua/tuiter/init.lua    public API, config, run-all runner, watch/JUnit/CI/import
-lua/tuiter/parser.lua  .http parsing + validation + directives (pure Lua)
-lua/tuiter/graphql.lua .graphql parsing (pure Lua)
-lua/tuiter/client.lua  env/var resolution, dynamic values, curl, assertions,
-                       named chaining, dotenv, pagination, streaming, response parsing
-lua/tuiter/auth.lua    OAuth2/bearer token management (cached)
-lua/tuiter/codegen.lua curl/python/js/ts/go/rust/php/graphql snippet generation
-lua/tuiter/import.lua  Postman + OpenAPI -> .http conversion (pure functions)
-lua/tuiter/ui.lua      response windows + request sidebar + run summary + streaming
-lua/tuiter/history.lua persisted request history (secrets redacted)
-lua/tuiter/pickers.lua Telescope picker providers
+plugin/tuiter.lua        commands + filetype detection
+ftplugin/http.lua        buffer keymaps + commentstring + omnifunc + diagnostics
+                         + {{var}} hover (K) and definition jump (gd)
+ftplugin/graphql.lua     same for .graphql buffers
+lua/tuiter/init.lua      public API, config, run-all runner, watch/JUnit/CI/import
+lua/tuiter/parser.lua    .http parsing + validation + directives (pure Lua)
+lua/tuiter/graphql.lua   .graphql parsing (pure Lua)
+lua/tuiter/client.lua    env/var resolution, dynamic values, curl, assertions,
+                         named chaining, dotenv, pagination, streaming, pre/post scripts
+lua/tuiter/auth.lua      OAuth2/bearer token management (cached)
+lua/tuiter/codegen.lua   curl/python/js/ts/go/rust/php/graphql snippet generation
+lua/tuiter/import.lua    Postman + OpenAPI -> .http conversion (pure functions)
+lua/tuiter/ui.lua        response windows + request sidebar + run summary + streaming
+                         + loading spinner + method-colored badges + split mode
+lua/tuiter/history.lua   persisted request history (secrets redacted)
+lua/tuiter/pickers.lua   Telescope picker providers
 lua/telescope/_extensions/tuiter.lua  Telescope extension registration
+syntax/http.vim          .http syntax highlighting (methods, URLs, headers, JSON)
 ```
 
 ### Telescope extension
