@@ -827,11 +827,11 @@ end
 -- --- ui.json_path works in split mode (offset handled by caller) ---
 -- (tested via the existing json_path tests above; split offset is in jump_key)
 
--- --- set_statusline format: METHOD url · HTTP code · time · size · env ---
+-- --- set_statusline format: METHOD url · badge · time · size · encoding · env · hints ---
 -- (tested by checking the format string pattern in set_statusline)
-local sl = string.format("%%#%s# %s %s · %s%s %%*", "TuiterStatusOk", "GET", "http://x.test/", "HTTP 200 OK · 45ms · 1.2KB", " · dev")
+local sl = string.format("%%#%s# %s %%*%%#%s# %s %%*%s · %s%s%s %%*", "TuiterStatusHint", "GET", "TuiterStatusOk", " 200 ", "45ms", "1.2KB", "", " · dev")
 eq(sl:match("GET"), "GET", "statusline contains method")
-eq(sl:match("HTTP 200"), "HTTP 200", "statusline contains status code")
+eq(sl:match("200"), "200", "statusline contains status code")
 eq(sl:match("45ms"), "45ms", "statusline contains time")
 eq(sl:match("1.2KB"), "1.2KB", "statusline contains size")
 eq(sl:match("dev"), "dev", "statusline contains env")

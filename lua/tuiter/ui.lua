@@ -14,6 +14,7 @@ local M = {
 		aux_win = nil,
 		tab = 1, -- 1=body 2=headers 3=timeline
 		pretty = true, -- pretty vs raw JSON body
+		show_all = false, -- show truncated body (for >200KB responses)
 		display = nil, -- { raw, pretty, json } of the shown body
 		results = {}, -- url -> http status, shown as marks in the sidebar
 		resp_detail = {}, -- url -> { time, size, error } for the sidebar marks
@@ -132,6 +133,12 @@ local function fmt_size(n)
 	return string.format("%.1fMB", n / 1024 / 1024)
 end
 
+local TAB_NAMES = { "Body", "Headers", "Timeline", "Tests" }
+
+local function buf_map(buf, lhs, rhs, desc)
+	vim.keymap.set("n", lhs, rhs, { buffer = buf, nowait = true, desc = "Tuiter: " .. desc })
+end
+
 -- ---------------------------------------------------------------------------
 -- Loading spinner
 -- ---------------------------------------------------------------------------
@@ -214,13 +221,124 @@ local function layout_mode()
 	return "float"
 end
 
-local function is_compact()
-	local ok, cfg = pcall(require, "tuiter")
-	if ok and cfg.opts then
-		local o = cfg.opts()
-		return (o.windows or {}).compact or false
+--- Return the content buffer and line offset for the current mode.
+--- In split mode the buffer is resp_split_buf and content starts at line 3
+--- (line 1 = tab bar, line 2 = blank separator). In float mode it is
+--- body_win's buffer with offset 1.
+local function get_content_buf_and_offset()
+	if is_valid(M.state.resp_split_win) then
+		return M.state.resp_split_buf, 3
 	end
-	return false
+	if is_valid(M.state.body_win) then
+		return vim.api.nvim_win_get_buf(M.state.body_win), 1
+	end
+	return nil, 1
+end
+
+--- Build the tab bar string and return { line, ok, badge, method }.
+--- width: window width for right-alignment.
+local function build_tab_bar(resp, spec, width)
+	local method = (spec and spec.method) or ""
+	local method_dot = method ~= "" and ("● ") or ""
+	local tab_part = ""
+	for i, name in ipairs(TAB_NAMES) do
+		if i > 1 then
+			tab_part = tab_part .. " │ "
+		end
+		tab_part = tab_part .. (i == M.state.tab and name:upper() or name:lower())
+	end
+	local badge = ""
+	if resp.status > 0 then
+		badge = fmt_status_badge(resp.status)
+	elseif resp.error and resp.error ~= "" then
+		badge = " ERR "
+	end
+	local timing = string.format("%dms", (resp.time or 0) * 1000)
+	local size = fmt_size(resp.size)
+	local line = " " .. method_dot .. method .. "  " .. tab_part
+	local right = badge .. " " .. timing .. " · " .. size
+	if #line + #right + 3 < width then
+		line = line .. string.rep(" ", width - #line - #right) .. right
+	end
+	local ok = resp.ok and resp.status < 400
+	return line, ok, badge, method
+end
+
+--- Apply highlights to a tab bar line at row 0 in buf.
+local function highlight_tab_bar(buf, line, method, badge)
+	if method and method ~= "" then
+		local dot_pos = line:find("●", 1, true)
+		if dot_pos then
+			vim.api.nvim_buf_add_highlight(buf, -1, METHOD_HL[method] or "Comment", 0, dot_pos - 1, dot_pos + 1)
+		end
+		local method_end = line:find(method, dot_pos and dot_pos or 1, true)
+		if method_end then
+			vim.api.nvim_buf_add_highlight(buf, -1, METHOD_HL[method] or "Comment", 0, method_end - 1, method_end - 1 + #method)
+		end
+	end
+	local pos = 1
+	for i, name in ipairs(TAB_NAMES) do
+		local seg = (i > 1 and " │ " or " ") .. (i == M.state.tab and name:upper() or name:lower())
+		local hl = i == M.state.tab and "TuiterTabActive" or "TuiterTabInactive"
+		vim.api.nvim_buf_add_highlight(buf, -1, hl, 0, pos, pos + #seg)
+		pos = pos + #seg
+	end
+	if badge and badge ~= "" then
+		local bpos = line:find(badge, 1, true)
+		if bpos then
+			local code = tonumber(badge:match("%d+"))
+			local hl = code and status_badge_hl(code) or "TuiterStatusErr"
+			vim.api.nvim_buf_add_highlight(buf, -1, hl, 0, bpos - 1, bpos - 1 + #badge)
+		end
+	end
+end
+
+--- Wire all standard response keymaps onto a buffer.
+local function setup_response_keymaps(buf, opts, close_fn)
+	close_fn = close_fn or M.close
+	buf_map(buf, "q", close_fn, "Close response")
+	buf_map(buf, "t", M.cycle_tab, "Next tab")
+	buf_map(buf, "1", function() M.set_tab(1) end, "Body tab")
+	buf_map(buf, "2", function() M.set_tab(2) end, "Headers tab")
+	buf_map(buf, "3", function() M.set_tab(3) end, "Timeline tab")
+	buf_map(buf, "4", function() M.set_tab(4) end, "Tests tab")
+	buf_map(buf, "p", M.toggle_pretty, "Toggle pretty/raw body")
+	buf_map(buf, "y", M.yank_body, "Copy current tab")
+	buf_map(buf, "f", M.save_body, "Save body to file")
+	buf_map(buf, "z", M.toggle_zoom, "Zoom response")
+	buf_map(buf, "?", M.toggle_help, "Show keymap help")
+	buf_map(buf, "/", function()
+		vim.cmd("normal! /")
+	end, "Search in response")
+	buf_map(buf, "A", function()
+		M.state.show_all = not M.state.show_all
+		if is_valid(M.state.resp_split_win) then
+			render_split_content()
+		else
+			render_content()
+		end
+	end, "Toggle show-all for truncated bodies")
+	buf_map(buf, "c", function()
+		if opts.copy_curl then opts.copy_curl() end
+	end, "Copy as curl")
+	buf_map(buf, "C", function()
+		if opts.copy_code then opts.copy_code() end
+	end, "Copy as code snippet")
+	buf_map(buf, "r", function()
+		if opts.resend then opts.resend() end
+	end, "Resend request")
+	buf_map(buf, "D", M.diff_prev, "Diff against previous response")
+	buf_map(buf, "J", M.jq_filter, "Filter body through jq")
+	buf_map(buf, "o", M.open_in_tab, "Open response in a new tab")
+	buf_map(buf, "]k", function() M.jump_key(1) end, "Next JSON key")
+	buf_map(buf, "[k", function() M.jump_key(-1) end, "Previous JSON key")
+	buf_map(buf, "P", M.copy_json_path, "Copy JSON path")
+	buf_map(buf, "V", M.copy_json_value, "Copy JSON value")
+	buf_map(buf, "U", M.copy_url, "Copy resolved URL")
+	buf_map(buf, "gx", function()
+		local last = M.state.last
+		if last then vim.ui.open(client.resolve_url(last.spec)) end
+	end, "Open request URL in browser")
 end
 
 local function is_json(resp)
@@ -254,10 +372,6 @@ local function body_filetype(resp)
 		return "javascript"
 	end
 	return nil
-end
-
-local function buf_map(buf, lhs, rhs, desc)
-	vim.keymap.set("n", lhs, rhs, { buffer = buf, nowait = true, desc = "Tuiter: " .. desc })
 end
 
 -- ---------------------------------------------------------------------------
@@ -384,8 +498,6 @@ local function open_floats(tab_buf, body_buf, body_title, win_cfg)
 	return head_win, body_win
 end
 
-local TAB_NAMES = { "Body", "Headers", "Timeline", "Tests" }
-
 local function render_tabs()
 	local resp, spec = M.state.last.resp, M.state.last.spec
 	if not is_valid(M.state.head_win) then
@@ -393,61 +505,11 @@ local function render_tabs()
 	end
 	local buf = vim.api.nvim_win_get_buf(M.state.head_win)
 	local width = vim.api.nvim_win_get_width(M.state.head_win)
-	-- method dot + name
-	local method = spec.method or ""
-	local method_dot = method ~= "" and ("● ") or ""
-	local line = " " .. method_dot .. method .. "  "
-	-- tab names (active = uppercase, inactive = lowercase)
-	for i, name in ipairs(TAB_NAMES) do
-		if i > 1 then
-			line = line .. " │ "
-		end
-		line = line .. (i == M.state.tab and name:upper() or name:lower())
-	end
-	-- status badge + timing
-	local badge = ""
-	if resp.status > 0 then
-		badge = fmt_status_badge(resp.status)
-	elseif resp.error and resp.error ~= "" then
-		badge = " ERR "
-	end
-	local timing = string.format("%dms", (resp.time or 0) * 1000)
-	local size = fmt_size(resp.size)
-	local right = badge .. " " .. timing .. " · " .. size
-	if #line + #right + 3 < width then
-		line = line .. string.rep(" ", width - #line - #right) .. right
-	end
+	local line, _, badge, method = build_tab_bar(resp, spec, width)
 	vim.bo[buf].modifiable = true
 	vim.api.nvim_buf_set_lines(buf, 0, -1, false, { line })
 	vim.bo[buf].modifiable = false
-	-- highlight method dot + name
-	if method ~= "" then
-		local dot_pos = line:find("●", 1, true)
-		if dot_pos then
-			vim.api.nvim_buf_add_highlight(buf, -1, METHOD_HL[method] or "Comment", 0, dot_pos - 1, dot_pos + 1)
-		end
-		local method_end = line:find(method, dot_pos and dot_pos or 1, true)
-		if method_end then
-			vim.api.nvim_buf_add_highlight(buf, -1, METHOD_HL[method] or "Comment", 0, method_end - 1, method_end - 1 + #method)
-		end
-	end
-	-- highlight tab names
-	local pos = 1
-	for i, name in ipairs(TAB_NAMES) do
-		local seg = (i > 1 and " │ " or " ") .. (i == M.state.tab and name:upper() or name:lower())
-		local hl = i == M.state.tab and "TuiterTabActive" or "TuiterTabInactive"
-		vim.api.nvim_buf_add_highlight(buf, -1, hl, 0, pos, pos + #seg)
-		pos = pos + #seg
-	end
-	-- highlight status badge
-	if badge ~= "" then
-		local bpos = line:find(badge, 1, true)
-		if bpos then
-			local code = tonumber(badge:match("%d+"))
-			local hl = code and status_badge_hl(code) or "TuiterStatusErr"
-			vim.api.nvim_buf_add_highlight(buf, -1, hl, 0, bpos - 1, bpos - 1 + #badge)
-		end
-	end
+	highlight_tab_bar(buf, line, method, badge)
 end
 
 --- Rows for the Insomnia-style "Timeline" tab (from curl timing data).
@@ -573,72 +635,6 @@ end
 
 -- Split-mode helpers: tab bar as first line in the same buffer as the body
 
-local function render_tab_line(resp, spec)
-	local reason = resp.headers:match("^HTTP/%S+ %d+ ([^\r\n]*)") or ""
-	local ok = resp.ok and resp.status < 400
-	-- method dot (colored circle before method name)
-	local method = (spec and spec.method) or ""
-	local method_dot = method ~= "" and ("● ") or ""
-	-- tab names with solid separators
-	local tab_part = ""
-	for i, name in ipairs(TAB_NAMES) do
-		if i > 1 then
-			tab_part = tab_part .. " │ "
-		end
-		tab_part = tab_part .. (i == M.state.tab and name:upper() or name:lower())
-	end
-	-- status badge
-	local badge = ""
-	if resp.status > 0 then
-		badge = fmt_status_badge(resp.status)
-	elseif resp.error and resp.error ~= "" then
-		badge = " ERR "
-	end
-	-- timing
-	local timing = string.format("%dms", (resp.time or 0) * 1000)
-	local size = fmt_size(resp.size)
-	local line = " " .. method_dot .. method .. "  " .. tab_part
-	local win = M.state.resp_split_win
-	local width = win and vim.api.nvim_win_get_width(win) or 80
-	-- right-align: badge + timing + size
-	local right = badge .. " " .. timing .. " · " .. size
-	if #line + #right + 3 < width then
-		line = line .. string.rep(" ", width - #line - #right) .. right
-	end
-	return line, ok, badge, method
-end
-
-local function highlight_tab_line(buf, line, resp, method, badge)
-	-- highlight method dot + name
-	if method and method ~= "" then
-		local dot_pos = line:find("●", 1, true)
-		if dot_pos then
-			vim.api.nvim_buf_add_highlight(buf, -1, METHOD_HL[method] or "Comment", 0, dot_pos - 1, dot_pos + 1)
-		end
-		local method_end = line:find(method, dot_pos and dot_pos or 1, true)
-		if method_end then
-			vim.api.nvim_buf_add_highlight(buf, -1, METHOD_HL[method] or "Comment", 0, method_end - 1, method_end - 1 + #method)
-		end
-	end
-	-- highlight tab names (active = bold, inactive = dim)
-	local pos = 1
-	for i, name in ipairs(TAB_NAMES) do
-		local seg = (i > 1 and " │ " or " ") .. (i == M.state.tab and name:upper() or name:lower())
-		local hl = i == M.state.tab and "TuiterTabActive" or "TuiterTabInactive"
-		vim.api.nvim_buf_add_highlight(buf, -1, hl, 0, pos, pos + #seg)
-		pos = pos + #seg
-	end
-	-- highlight status badge
-	if badge and badge ~= "" then
-		local bpos = line:find(badge, 1, true)
-		if bpos then
-			local code = tonumber(badge:match("%d+"))
-			local hl = code and status_badge_hl(code) or "TuiterStatusErr"
-			vim.api.nvim_buf_add_highlight(buf, -1, hl, 0, bpos - 1, bpos - 1 + #badge)
-		end
-	end
-end
-
 --- Render response content into the split buffer (below the tab bar line).
 local function render_split_content()
 	local buf = M.state.resp_split_buf
@@ -649,10 +645,12 @@ local function render_split_content()
 	vim.bo[buf].modifiable = true
 	-- read existing tab line (line 1)
 	local tab_line = vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1] or ""
-	local new_tab_line, ok, badge, method = render_tab_line(resp, M.state.last and M.state.last.spec)
+	local win = M.state.resp_split_win
+	local width = win and vim.api.nvim_win_get_width(win) or 80
+	local new_tab_line, ok, badge, method = build_tab_bar(resp, M.state.last and M.state.last.spec, width)
 	if new_tab_line ~= tab_line then
 		vim.api.nvim_buf_set_lines(buf, 0, 1, false, { new_tab_line })
-		highlight_tab_line(buf, new_tab_line, resp, method, badge)
+		highlight_tab_bar(buf, new_tab_line, method, badge)
 	end
 	-- build the content lines for the current tab
 	local content_lines = {}
@@ -668,15 +666,15 @@ local function render_split_content()
 			content = "(empty body)"
 		end
 		content_lines = vim.split(content, "\n")
-		-- P3: truncate >200KB, show [show-all] toggle
+		-- P3: truncate >200KB, toggle via `A` or `gt`
 		local raw_size = #resp.body or 0
-		if raw_size > 200 * 1024 then
+		if raw_size > 200 * 1024 and not M.state.show_all then
 			local max_lines = 2000
 			if #content_lines > max_lines then
 				local truncated = vim.list_extend({}, content_lines, 1, max_lines)
 				truncated[#truncated + 1] = ""
 				truncated[#truncated + 1] = string.format(
-					"[show-all] truncated %d lines (%.1fKB) — press gt to view raw",
+					"[show-all] truncated %d lines (%.1fKB) — press A to expand",
 					#content_lines - max_lines,
 					raw_size / 1024
 				)
@@ -711,7 +709,7 @@ local function render_split_content()
 		new_lines[#new_lines + 1] = l
 	end
 	vim.api.nvim_buf_set_lines(buf, 0, -1, false, new_lines)
-	highlight_tab_line(buf, new_tab_line, resp, method, badge)
+	highlight_tab_bar(buf, new_tab_line, method, badge)
 	-- filetype + treesitter for body tab
 	if M.state.tab == 1 then
 		local ft = M.state.display and M.state.display.json and "json" or body_filetype(resp)
@@ -835,68 +833,14 @@ function M.show(resp, spec, opts)
 		pcall(vim.api.nvim_win_set_width, body_win, math.min(resp_width, vim.o.columns - 4))
 		-- tab bar as first line in the same buffer
 		vim.bo[body_buf].modifiable = true
-		local tab_line, _, badge = render_tab_line(resp, spec)
+		local resp_width = (opts.windows and opts.windows.width) or 120
+		local tab_line, _, badge, method = build_tab_bar(resp, spec, math.min(resp_width, vim.o.columns - 4))
 		vim.api.nvim_buf_set_lines(body_buf, 0, 0, false, { tab_line, "" })
-		highlight_tab_line(body_buf, tab_line, resp, spec.method, badge)
+		highlight_tab_bar(body_buf, tab_line, method, badge)
 		vim.bo[body_buf].modifiable = false
 		set_statusline(body_win, resp, spec)
 		M.state.resp_split_win, M.state.resp_split_buf = body_win, body_buf
-
-		-- keymaps on the response split
-		buf_map(body_buf, "q", function()
-			M.close_response()
-		end, "Close response")
-		buf_map(body_buf, "t", M.cycle_tab, "Next tab")
-		buf_map(body_buf, "1", function()
-			M.set_tab(1)
-		end, "Body tab")
-		buf_map(body_buf, "2", function()
-			M.set_tab(2)
-		end, "Headers tab")
-		buf_map(body_buf, "3", function()
-			M.set_tab(3)
-		end, "Timeline tab")
-		buf_map(body_buf, "4", function()
-			M.set_tab(4)
-		end, "Tests tab")
-		buf_map(body_buf, "p", M.toggle_pretty, "Toggle pretty/raw body")
-		buf_map(body_buf, "y", M.yank_body, "Copy current tab")
-		buf_map(body_buf, "f", M.save_body, "Save body to file")
-		buf_map(body_buf, "?", M.toggle_help, "Show keymap help")
-		buf_map(body_buf, "c", function()
-			if opts.copy_curl then
-				opts.copy_curl()
-			end
-		end, "Copy as curl")
-		buf_map(body_buf, "C", function()
-			if opts.copy_code then
-				opts.copy_code()
-			end
-		end, "Copy as code snippet")
-		buf_map(body_buf, "r", function()
-			if opts.resend then
-				opts.resend()
-			end
-		end, "Resend request")
-		buf_map(body_buf, "D", M.diff_prev, "Diff against previous response")
-		buf_map(body_buf, "J", M.jq_filter, "Filter body through jq")
-		buf_map(body_buf, "o", M.open_in_tab, "Open response in a new tab")
-		buf_map(body_buf, "]k", function()
-			M.jump_key(1)
-		end, "Next JSON key")
-		buf_map(body_buf, "[k", function()
-			M.jump_key(-1)
-		end, "Previous JSON key")
-		buf_map(body_buf, "P", M.copy_json_path, "Copy JSON path")
-		buf_map(body_buf, "V", M.copy_json_value, "Copy JSON value")
-		buf_map(body_buf, "U", M.copy_url, "Copy resolved URL")
-		buf_map(body_buf, "gx", function()
-			local last = M.state.last
-			if last then
-				vim.ui.open(client.resolve_url(last.spec))
-			end
-		end, "Open request URL in browser")
-
+		setup_response_keymaps(body_buf, opts, M.close_response)
 		render_split_content()
 	else
 		-- float mode (default)
@@ -906,60 +850,14 @@ function M.show(resp, spec, opts)
 		local head_win, body_win =
 			open_floats(tab_buf, body_buf, string.format("%s %s %s", spec.method, spec.url, env), opts.windows)
 
+		setup_response_keymaps(body_buf, opts, M.close)
 		for _, b in ipairs({ tab_buf, body_buf }) do
 			buf_map(b, "q", M.close, "Close response")
 			buf_map(b, "t", M.cycle_tab, "Next tab")
-			buf_map(b, "1", function()
-				M.set_tab(1)
-			end, "Body tab")
-			buf_map(b, "2", function()
-				M.set_tab(2)
-			end, "Headers tab")
-			buf_map(b, "3", function()
-				M.set_tab(3)
-			end, "Timeline tab")
+			buf_map(b, "1", function() M.set_tab(1) end, "Body tab")
+			buf_map(b, "2", function() M.set_tab(2) end, "Headers tab")
+			buf_map(b, "3", function() M.set_tab(3) end, "Timeline tab")
 		end
-		buf_map(body_buf, "4", function()
-			M.set_tab(4)
-		end, "Tests tab")
-		buf_map(body_buf, "p", M.toggle_pretty, "Toggle pretty/raw body")
-		buf_map(body_buf, "y", M.yank_body, "Copy current tab")
-		buf_map(body_buf, "f", M.save_body, "Save body to file")
-		buf_map(body_buf, "z", M.toggle_zoom, "Zoom response")
-		buf_map(body_buf, "?", M.toggle_help, "Show keymap help")
-		buf_map(body_buf, "c", function()
-			if opts.copy_curl then
-				opts.copy_curl()
-			end
-		end, "Copy as curl")
-		buf_map(body_buf, "C", function()
-			if opts.copy_code then
-				opts.copy_code()
-			end
-		end, "Copy as code snippet")
-		buf_map(body_buf, "r", function()
-			if opts.resend then
-				opts.resend()
-			end
-		end, "Resend request")
-		buf_map(body_buf, "D", M.diff_prev, "Diff against previous response")
-		buf_map(body_buf, "J", M.jq_filter, "Filter body through jq")
-		buf_map(body_buf, "o", M.open_in_tab, "Open response in a new tab")
-		buf_map(body_buf, "]k", function()
-			M.jump_key(1)
-		end, "Next JSON key")
-		buf_map(body_buf, "[k", function()
-			M.jump_key(-1)
-		end, "Previous JSON key")
-		buf_map(body_buf, "P", M.copy_json_path, "Copy JSON path")
-		buf_map(body_buf, "V", M.copy_json_value, "Copy JSON value")
-		buf_map(body_buf, "U", M.copy_url, "Copy resolved URL")
-		buf_map(body_buf, "gx", function()
-			local last = M.state.last
-			if last then
-				vim.ui.open(client.resolve_url(last.spec))
-			end
-		end, "Open request URL in browser")
 
 		vim.wo[body_win].wrap = true
 		vim.wo[body_win].number = true -- Postman-style line numbers on the response
@@ -1002,8 +900,8 @@ function M.toggle_zoom()
 end
 
 function M.toggle_pretty()
-	local is_split = is_valid(M.state.resp_split_win)
-	if not is_split and not is_valid(M.state.body_win) then
+	local buf, _ = get_content_buf_and_offset()
+	if not buf then
 		return
 	end
 	if not M.state.display then
@@ -1017,7 +915,7 @@ function M.toggle_pretty()
 		M.set_tab(1)
 	end
 	M.state.pretty = not M.state.pretty
-	if is_split then
+	if is_valid(M.state.resp_split_win) then
 		render_split_content()
 	else
 		render_content()
@@ -1025,13 +923,11 @@ function M.toggle_pretty()
 end
 
 function M.yank_body()
-	local is_split = is_valid(M.state.resp_split_win)
-	if not is_split and not is_valid(M.state.body_win) then
+	local buf, start = get_content_buf_and_offset()
+	if not buf then
 		return
 	end
-	local buf = is_split and M.state.resp_split_buf or vim.api.nvim_win_get_buf(M.state.body_win)
 	local all_lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-	local start = is_split and 3 or 1 -- skip tab bar line in split mode
 	local text = table.concat(vim.list_extend({}, all_lines, start, #all_lines), "\n")
 	vim.fn.setreg('"', text)
 	vim.notify("Tuiter: " .. TAB_NAMES[M.state.tab]:lower() .. " copied", vim.log.levels.INFO, { title = "Tuiter" })
@@ -1119,13 +1015,11 @@ function M.copy_url()
 end
 
 function M.save_body()
-	local is_split = is_valid(M.state.resp_split_win)
-	if not is_split and not is_valid(M.state.body_win) then
+	local buf, start = get_content_buf_and_offset()
+	if not buf then
 		return
 	end
-	local buf = is_split and M.state.resp_split_buf or vim.api.nvim_win_get_buf(M.state.body_win)
 	local all_lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-	local start = is_split and 3 or 1 -- skip tab bar in split mode
 	local text = table.concat(vim.list_extend({}, all_lines, start, #all_lines), "\n")
 	local default = "tuiter-body-" .. os.date("%Y%m%d-%H%M%S") .. ".json"
 	vim.ui.input({ prompt = "Save body to:", default = default }, function(path)
@@ -1429,14 +1323,12 @@ end
 
 --- Jump to the next/previous top-level JSON key in the pretty body tab.
 function M.jump_key(dir)
-	local is_split = is_valid(M.state.resp_split_win)
-	local body_win = is_split and M.state.resp_split_win or M.state.body_win
-	if not is_valid(body_win) or M.state.tab ~= 1 or not M.state.display or not M.state.display.json then
+	local buf, content_start = get_content_buf_and_offset()
+	local body_win = is_valid(M.state.resp_split_win) and M.state.resp_split_win or M.state.body_win
+	if not buf or not is_valid(body_win) or M.state.tab ~= 1 or not M.state.display or not M.state.display.json then
 		return
 	end
-	local buf = is_split and M.state.resp_split_buf or vim.api.nvim_win_get_buf(body_win)
 	local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-	local content_start = is_split and 3 or 1 -- skip tab bar in split mode
 	local keys = {}
 	for i = content_start, #lines do
 		local line = lines[i]

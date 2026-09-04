@@ -82,9 +82,9 @@ function M.parse_lines(lines)
 			if n then
 				cur.name = n
 			end
-			local k, v = line:match("^#%s*@([%w%-_]+)%s*(.-)%s*$")
-			if k then
-				k = k:gsub("%-", "_")
+		local k, v = line:match("^#%s*@([%w%-_]+)%s*(.-)%s*$")
+		if k then
+			k = k:gsub("%-", "_")
 			if k == "name" then
 				-- handled above
 			elseif k == "test" then
@@ -112,9 +112,9 @@ function M.parse_lines(lines)
 				end
 				cur.opts.scripts.after = v
 			else
-					cur.opts[k] = v == "" and true or v
-				end
+				cur.opts[k] = v == "" and true or v
 			end
+		end
 		else
 			local k, v = line:match("^([%w%-_]+)%s*:%s*(.*)$")
 			if k then
