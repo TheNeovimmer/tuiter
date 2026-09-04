@@ -3,178 +3,88 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>tuiter — API explorer for Neovim</title>
+    <title>tuiter · Handbook</title>
+    <meta name="description" content="tuiter — a Telescope-powered API explorer for Neovim. Handbook, reference, and configuration.">
     <link rel="stylesheet" href="assets/style.css">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600&family=Hanken+Grotesk:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 </head>
 <body>
-    <nav class="nav">
-        <div class="nav-inner">
-            <a href="/" class="nav-logo">tuiter</a>
-            <div class="nav-links">
-                <a href="#features">Features</a>
-                <a href="#installation">Install</a>
-                <a href="#usage">Usage</a>
-                <a href="#telescope">Telescope</a>
-                <a href="#commands">Commands</a>
+    <div class="layout">
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-head">
+                <a href="#top" class="brand">
+                    <span class="brand-mark">t</span>
+                    <span class="brand-name">tuiter</span>
+                </a>
+                <p class="brand-tag">API explorer for Neovim</p>
+            </div>
+            <nav class="toc">
+                <p class="toc-label">Contents</p>
+                <ol class="toc-list">
+                    <li><a href="#overview">Overview</a></li>
+                    <li><a href="#install">Install</a></li>
+                    <li><a href="#quickstart">Quickstart</a></li>
+                    <li><a href="#telescope">Telescope</a></li>
+                    <li><a href="#keymaps">Keymaps</a></li>
+                    <li><a href="#commands">Commands</a></li>
+                    <li><a href="#collections">Collections &amp; Templates</a></li>
+                    <li><a href="#tags">Request tags</a></li>
+                    <li><a href="#configuration">Configuration</a></li>
+                </ol>
+            </nav>
+            <div class="sidebar-foot">
                 <a href="https://github.com/TheNeovimmer/tuiter">GitHub</a>
+                <span>·</span>
+                <a href="https://github.com/TheNeovimmer/tuiter/issues">Issues</a>
             </div>
-        </div>
-    </nav>
+        </aside>
 
-    <header class="hero">
-        <div class="hero-inner">
-            <h1>API explorer for <span class="highlight">Neovim</span></h1>
-            <p class="hero-sub">Write requests in <code>.http</code> files, send them with one key, read the response in a floating window — with a Telescope-powered request browser, collections runner, history, environments, dynamic variables, and JSON pretty-printing. Pure Lua, zero deps, Neovim-native.</p>
-            <div class="hero-actions">
-                <a href="#installation" class="btn btn-primary">Get started</a>
-                <a href="https://github.com/TheNeovimmer/tuiter" class="btn btn-secondary">View on GitHub</a>
-            </div>
-        </div>
-    </header>
+        <main class="content" id="top">
+            <header class="masthead">
+                <p class="doc-meta">Neovim plugin · Handbook</p>
+                <h1 class="title">An API explorer that lives in your editor.</h1>
+                <p class="lede">Write requests in <code>.http</code> files, send them with one key, read responses in a floating window. Browsing, history, environments, and collections — all in Telescope, all keyboard-driven. Pure Lua and <code>curl</code>, zero dependencies.</p>
+                <div class="quick-links">
+                    <a class="qt" href="#install"><span>Install</span><span class="qt-key">→</span></a>
+                    <a class="qt" href="#quickstart"><span>Quickstart</span><span class="qt-key">→</span></a>
+                </div>
+            </header>
 
-    <section class="features" id="features">
-        <div class="features-inner">
-            <h2>Features</h2>
-            <div class="feature-grid">
-                <div class="feature-card">
-                    <div class="feature-icon">📁</div>
-                    <h3>.http request files</h3>
-                    <p>REST Client format: methods, headers, bodies, named <code>###</code> sections, <code># @name</code></p>
-                </div>
-                <div class="feature-card">
-                    <div class="feature-icon">🎨</div>
-                    <h3>Syntax highlighting</h3>
-                    <p>Methods color-coded (GET green, POST blue, PUT/PATCH yellow, DELETE red), blue URLs, section titles, JSON bodies, <code>{{variables}}</code></p>
-                </div>
-                <div class="feature-card">
-                    <div class="feature-icon">⏳</div>
-                    <h3>Loading spinner</h3>
-                    <p>Animated braille spinner shows <code>⠋ GET https://api…</code> while a request is in flight</p>
-                </div>
-                <div class="feature-card">
-                    <div class="feature-icon">✓</div>
-                    <h3>Inline result marks</h3>
-                    <p>Every send stamps <code>✓ 200 · 45ms</code> / <code>✗ 404</code> as virtual text on the request line</p>
-                </div>
-                <div class="feature-card">
-                    <div class="feature-icon">🔭</div>
-                    <h3>Telescope-powered UI</h3>
-                    <p>All browsing via Telescope pickers with fuzzy finding, multi-select, and smart sorting (frequency/recency)</p>
-                </div>
-                <div class="feature-card">
-                    <div class="feature-icon">📋</div>
-                    <h3>Request picker</h3>
-                    <p>Browse requests with favorites, tags, last used time; actions: send, go to file, copy curl, copy code</p>
-                </div>
-                <div class="feature-card">
-                    <div class="feature-icon">📦</div>
-                    <h3>Collections</h3>
-                    <p>Organize requests in <code>*.http.collections/</code> directories; browse with Telescope picker</p>
-                </div>
-                <div class="feature-card">
-                    <div class="feature-icon">📝</div>
-                    <h3>Templates</h3>
-                    <p>Save and reuse request patterns; 10 built-in templates; browse with Telescope picker</p>
-                </div>
-                <div class="feature-card">
-                    <div class="feature-icon">🏷️</div>
-                    <h3>Request tags</h3>
-                    <p><code># @tag auth,breaking,slow</code> for filtering; use <code>tag:auth</code> in picker prompt</p>
-                </div>
-                <div class="feature-card">
-                    <div class="feature-icon">⏩</div>
-                    <h3>Multi-select</h3>
-                    <p>Select multiple requests in picker with <code>&lt;Tab&gt;</code>, run all selected with <code>&lt;C-a&gt;</code></p>
-                </div>
-                <div class="feature-card">
-                    <div class="feature-icon">🔢</div>
-                    <h3>Smart sorting</h3>
-                    <p>Frequency-based and recency-based sorting across all pickers</p>
-                </div>
-                <div class="feature-card">
-                    <div class="feature-icon">🔄</div>
-                    <h3>Collection runner</h3>
-                    <p>Run every request in the file and show a ✓/✗ summary; <code># @skip</code> requests are excluded</p>
-                </div>
-                <div class="feature-card">
-                    <div class="feature-icon">⚡</div>
-                    <h3>Async requests</h3>
-                    <p><code>curl</code> via <code>vim.system</code>, zero plugin dependencies; cancel hanging requests</p>
-                </div>
-                <div class="feature-card">
-                    <div class="feature-icon">📊</div>
-                    <h3>Response viewer with tabs</h3>
-                    <p>Body / Headers / Timeline / Tests, with colored status badges and method-colored tab bar</p>
-                </div>
-                <div class="feature-card">
-                    <div class="feature-icon">🔐</div>
-                    <h3>OAuth2 + bearer auth</h3>
-                    <p><code># @auth bearer TOKEN</code>, <code># @auth oauth2 client_credentials</code> and refresh flows with token caching</p>
-                </div>
-                <div class="feature-card">
-                    <div class="feature-icon">🌊</div>
-                    <h3>Streaming (SSE)</h3>
-                    <p><code># @stream</code> pipes curl -N chunks into a live float</p>
-                </div>
-                <div class="feature-card">
-                    <div class="feature-icon">📄</div>
-                    <h3>Pagination</h3>
-                    <p><code># @paginate</code> follows <code>rel="next"</code> Link headers and concatenates array pages</p>
-                </div>
-                <div class="feature-card">
-                    <div class="feature-icon">🔗</div>
-                    <h3>Named request chaining</h3>
-                    <p>Reference any earlier request by name: <code>{{login.body.token}}</code>, <code>{{login.status}}</code></p>
-                </div>
-                <div class="feature-card">
-                    <div class="feature-icon">🧪</div>
-                    <h3>Assertions / tests</h3>
-                    <p><code># @test status == 200</code> per request, checked in the run summary + exported to JUnit JSON</p>
-                </div>
-                <div class="feature-card">
-                    <div class="feature-icon">💻</div>
-                    <h3>Copy as curl / code snippets</h3>
-                    <p>Shell-safe curl plus <code>:TuiterCopyAs python|js|ts|go|rust|php|graphql</code></p>
-                </div>
-                <div class="feature-card">
-                    <div class="feature-icon">📥</div>
-                    <h3>Import</h3>
-                    <p>Convert Postman collections, OpenAPI specs, and curl commands to <code>.http</code></p>
-                </div>
-                <div class="feature-card">
-                    <div class="feature-icon">🌍</div>
-                    <h3>Environments</h3>
-                    <p><code>http-client.env.json</code> / <code>tuiter.env.json</code> with <code>{{var}}</code> substitution and inheritance</p>
-                </div>
-                <div class="feature-card">
-                    <div class="feature-icon">🎯</div>
-                    <h3>Picker integration</h3>
-                    <p>Telescope extension (<code>history</code> / <code>requests</code> / <code>env</code>) plus <code>vim.ui.select</code></p>
-                </div>
-            </div>
-        </div>
-    </section>
+            <section id="overview" class="section">
+                <h2><span class="sec-num">§1</span>Overview</h2>
+                <p>tuiter turns ordinary <code>.http</code> files into a full request workspace — parse, send, inspect, organize. Every interaction happens through Telescope pickers, so the whole tool follows your muscle memory for fuzzy finding and multi-selection.</p>
 
-    <section class="install" id="installation">
-        <div class="install-inner">
-            <h2>Installation</h2>
-            <div class="install-content">
-                <div class="install-requirements">
-                    <h3>Requirements</h3>
-                    <ul>
-                        <li>Neovim >= 0.10 (uses <code>vim.system</code>, window titles, <code>vim.json</code>)</li>
-                        <li><code>curl</code> on PATH</li>
-                    </ul>
-                </div>
-                <div class="install-lazyvim">
-                    <h3>LazyVim / lazy.nvim</h3>
+                <p class="hd">What you can do</p>
+                <ul class="cap-list">
+                    <li><span class="cap">Execute</span> requests from any <code>.http</code> or <code>.graphql</code> buffer</li>
+                    <li><span class="cap">Inspect</span> responses in a tabbed viewer — body, headers, timeline, tests</li>
+                    <li><span class="cap">Organize</span> requests into collections and reusable templates</li>
+                    <li><span class="cap">Automate</span> with assertions, pre/post scripts, and dynamic variables</li>
+                    <li><span class="cap">Secure</span> — OAuth2, bearer, cookies, and secret redaction built in</li>
+                </ul>
+
+                <p class="hd">Design notes</p>
+                <p>Keyboard-first and zero-dependency. Requests go out through <code>curl</code> over <code>vim.system</code>, so the editor never blocks. The UI prefers <a href="#telescope">Telescope pickers</a> for anything you browse, and falls back to <code>vim.ui.select</code> when Telescope isn't installed.</p>
+            </section>
+
+            <section id="install" class="section">
+                <h2><span class="sec-num">§2</span>Install</h2>
+                <p class="hd">Requirements</p>
+                <ul class="req-list">
+                    <li>Neovim <code>≥ 0.10</code> — uses <code>vim.system</code>, window titles, <code>vim.json</code></li>
+                    <li><code>curl</code> on your <code>PATH</code></li>
+                    <li><code>telescope.nvim</code> for the pickers (falls back to <code>vim.ui.select</code>)</li>
+                </ul>
+
+                <p class="hd">LazyVim / lazy.nvim</p>
+                <figure class="code-fig">
+                    <div class="code-head"><span>~/.config/nvim/lua/plugins/tuiter.lua</span></div>
                     <pre><code>{
   "TheNeovimmer/tuiter",
   branch = "main",
-  dependencies = {},
+  dependencies = { "nvim-telescope/telescope.nvim" },
   cmd = { "Tuiter", "TuiterRun", "TuiterRunAll", "TuiterCancel",
           "TuiterSaveBody", "TuiterHistory", "TuiterEnv", "TuiterResponse",
           "TuiterCopyAs", "TuiterStream", "TuiterWatch", "TuiterJUnit",
@@ -184,17 +94,16 @@
   ft = { "http", "graphql" },
   opts = {},
 }</code></pre>
-                </div>
-            </div>
-        </div>
-    </section>
+                </figure>
+                <p class="note">Everything loads lazily — <code>cmd</code> on any <code>Tuiter*</code> command, <code>ft</code> on opening a <code>.http</code> / <code>.graphql</code> file. Enable the Telescope extension with <code>require("telescope").load_extension("tuiter")</code>.</p>
+            </section>
 
-    <section class="usage" id="usage">
-        <div class="usage-inner">
-            <h2>Usage</h2>
-            <div class="usage-content">
-                <p>Open a <code>.http</code> file and press <code>&lt;leader&gt;il</code> for the request sidebar, or put the cursor on a request and hit <code>&lt;leader&gt;is</code>:</p>
-                <pre><code>### Get users
+            <section id="quickstart" class="section">
+                <h2><span class="sec-num">§3</span>Quickstart</h2>
+                <p>Open a <code>.http</code> file and press <code>&lt;leader&gt;il</code> for the request picker, or put the cursor on a request and hit <code>&lt;leader&gt;is</code>.</p>
+                <figure class="code-fig">
+                    <div class="code-head"><span>requests.http</span></div>
+                    <pre><code>### Get users
 GET https://jsonplaceholder.typicode.com/users
 Accept: application/json
 
@@ -205,305 +114,202 @@ Content-Type: application/json
 {
   "name": "ada"
 }</code></pre>
-            </div>
-        </div>
-    </section>
+                </figure>
+                <p class="note">The file <em>is</em> the API client. Requests are plain text; send, verify, and commit them with your normal workflow.</p>
+            </section>
 
-    <section class="commands" id="commands">
-        <div class="commands-inner">
-            <h2>Commands</h2>
-            <div class="commands-grid">
-                <div class="command-item">
-                    <code>:Tuiter</code>
-                    <span>Toggle request sidebar</span>
-                </div>
-                <div class="command-item">
-                    <code>:TuiterRun [lnum]</code>
-                    <span>Send request under cursor</span>
-                </div>
-                <div class="command-item">
-                    <code>:TuiterRunAll</code>
-                    <span>Run all requests, show summary</span>
-                </div>
-                <div class="command-item">
-                    <code>:TuiterCancel</code>
-                    <span>Cancel in-flight requests</span>
-                </div>
-                <div class="command-item">
-                    <code>:TuiterSaveBody</code>
-                    <span>Save last response body to a file</span>
-                </div>
-                <div class="command-item">
-                    <code>:TuiterHistory</code>
-                    <span>Pick a past request and re-run it</span>
-                </div>
-                <div class="command-item">
-                    <code>:TuiterEnv</code>
-                    <span>Select environment</span>
-                </div>
-                <div class="command-item">
-                    <code>:TuiterResponse</code>
-                    <span>Toggle response window</span>
-                </div>
-                <div class="command-item">
-                    <code>:TuiterCopyAs [lang]</code>
-                    <span>Copy request as code snippet</span>
-                </div>
-                <div class="command-item">
-                    <code>:TuiterStream</code>
-                    <span>Stream SSE request</span>
-                </div>
-                <div class="command-item">
-                    <code>:TuiterWatch [sec]</code>
-                    <span>Re-run request every N seconds</span>
-                </div>
-                <div class="command-item">
-                    <code>:TuiterJUnit [path]</code>
-                    <span>Export results as JUnit XML</span>
-                </div>
-                <div class="command-item">
-                    <code>:TuiterCI</code>
-                    <span>Run all + exit non-zero on failure</span>
-                </div>
-                <div class="command-item">
-                    <code>:TuiterScaffold</code>
-                    <span>Open a scaffolded .http buffer</span>
-                </div>
-                <div class="command-item">
-                    <code>:TuiterFormat</code>
-                    <span>Pretty-print request body JSON</span>
-                </div>
-                <div class="command-item">
-                    <code>:TuiterImportPostman [file]</code>
-                    <span>Convert Postman collection to .http</span>
-                </div>
-                <div class="command-item">
-                    <code>:TuiterImportOpenapi [file]</code>
-                    <span>Convert OpenAPI spec to .http</span>
-                </div>
-                <div class="command-item">
-                    <code>:TuiterImportCurl</code>
-                    <span>Paste curl command → new .http buffer</span>
-                </div>
-                <div class="command-item">
-                    <code>:TuiterCollection [new|add|list]</code>
-                    <span>Manage request collections</span>
-                </div>
-                <div class="command-item">
-                    <code>:TuiterSnippet [list|save|insert]</code>
-                    <span>Manage request templates</span>
-                </div>
-            </div>
-        </div>
-    </section>
+            <section id="telescope" class="section">
+                <h2><span class="sec-num">§4</span>Telescope</h2>
+                <p>Every surface you browse is a picker — fuzzy-findable, multi-selectable, and sorted by how often and how recently you use things. Six pickers cover the whole tool.</p>
 
-    <section class="keymaps" id="keymaps">
-        <div class="keymaps-inner">
-            <h2>Keymaps</h2>
-            <p>Default keymaps in <code>.http</code> files (<code>&lt;leader&gt;i</code> group):</p>
-            <div class="keymaps-grid">
-                <div class="keymap-item">
-                    <code>&lt;leader&gt;is</code> / <code>&lt;CR&gt;</code>
-                    <span>Send request under cursor</span>
-                </div>
-                <div class="keymap-item">
-                    <code>&lt;leader&gt;il</code>
-                    <span>Request picker (Telescope)</span>
-                </div>
-                <div class="keymap-item">
-                    <code>&lt;leader&gt;ia</code>
-                    <span>Run all requests</span>
-                </div>
-                <div class="keymap-item">
-                    <code>&lt;leader&gt;ic</code>
-                    <span>Cancel in-flight requests</span>
-                </div>
-                <div class="keymap-item">
-                    <code>&lt;leader&gt;ik</code>
-                    <span>Keymap help float</span>
-                </div>
-                <div class="keymap-item">
-                    <code>&lt;leader&gt;ih</code>
-                    <span>Request history (Telescope)</span>
-                </div>
-                <div class="keymap-item">
-                    <code>&lt;leader&gt;ie</code>
-                    <span>Select environment (Telescope)</span>
-                </div>
-                <div class="keymap-item">
-                    <code>&lt;leader&gt;iv</code>
-                    <span>Show resolved variables</span>
-                </div>
-                <div class="keymap-item">
-                    <code>&lt;leader&gt;ir</code>
-                    <span>Toggle response window</span>
-                </div>
-                <div class="keymap-item">
-                    <code>&lt;leader&gt;iq</code>
-                    <span>Command picker (Telescope)</span>
-                </div>
-                <div class="keymap-item">
-                    <code>&lt;leader&gt;it</code>
-                    <span>Template picker (Telescope)</span>
-                </div>
-                <div class="keymap-item">
-                    <code>&lt;leader&gt;ib</code>
-                    <span>Collection picker (Telescope)</span>
-                </div>
-                <div class="keymap-item">
-                    <code>]r</code> / <code>[r</code>
-                    <span>Next / previous request</span>
-                </div>
-                <div class="keymap-item">
-                    <code>gx</code>
-                    <span>Open request URL in browser</span>
-                </div>
-            </div>
-        </div>
-    </section>
+                <table class="tbl">
+                    <thead>
+                        <tr><th>Picker</th><th>Command</th><th>Keymap</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td>Requests</td><td><code>:Telescope tuiter requests</code></td><td><kbd>&lt;leader&gt;il</kbd></td></tr>
+                        <tr><td>History</td><td><code>:Telescope tuiter history</code></td><td><kbd>&lt;leader&gt;ih</kbd></td></tr>
+                        <tr><td>Environments</td><td><code>:Telescope tuiter env</code></td><td><kbd>&lt;leader&gt;ie</kbd></td></tr>
+                        <tr><td>Collections</td><td><code>:Telescope tuiter collections</code></td><td><kbd>&lt;leader&gt;ib</kbd></td></tr>
+                        <tr><td>Templates</td><td><code>:Telescope tuiter templates</code></td><td><kbd>&lt;leader&gt;it</kbd></td></tr>
+                        <tr><td>Commands</td><td><code>:Telescope tuiter commands</code></td><td><kbd>&lt;leader&gt;iq</kbd></td></tr>
+                    </tbody>
+                </table>
 
-    <section class="telescope" id="telescope">
-        <div class="telescope-inner">
-            <h2>Telescope Pickers</h2>
-            <p class="telescope-sub">All browsing via Telescope with fuzzy finding, multi-select, and smart sorting.</p>
-            <div class="telescope-grid">
-                <div class="telescope-item">
-                    <h3>Requests</h3>
-                    <p><code>:Telescope tuiter requests</code> — browse requests in buffer, send, go to file, favorite, copy curl/code</p>
-                </div>
-                <div class="telescope-item">
-                    <h3>History</h3>
-                    <p><code>:Telescope tuiter history</code> — replay past requests, delete, copy curl</p>
-                </div>
-                <div class="telescope-item">
-                    <h3>Environments</h3>
-                    <p><code>:Telescope tuiter env</code> — switch between environments</p>
-                </div>
-                <div class="telescope-item">
-                    <h3>Collections</h3>
-                    <p><code>:Telescope tuiter collections</code> — browse collections, open requests inside, create/delete</p>
-                </div>
-                <div class="telescope-item">
-                    <h3>Templates</h3>
-                    <p><code>:Telescope tuiter templates</code> — insert built-in or saved templates, save current request</p>
-                </div>
-                <div class="telescope-item">
-                    <h3>Commands</h3>
-                    <p><code>:Telescope tuiter commands</code> — quick access to every tuiter command</p>
-                </div>
-            </div>
-            <h3>Request picker actions</h3>
-            <div class="keymaps-grid">
-                <div class="keymap-item">
-                    <code>&lt;CR&gt;</code>
-                    <span>Send request</span>
-                </div>
-                <div class="keymap-item">
-                    <code>&lt;C-o&gt;</code>
-                    <span>Go to request in file</span>
-                </div>
-                <div class="keymap-item">
-                    <code>&lt;C-f&gt;</code>
-                    <span>Toggle favorite</span>
-                </div>
-                <div class="keymap-item">
-                    <code>&lt;C-s&gt;</code>
-                    <span>Copy as curl</span>
-                </div>
-                <div class="keymap-item">
-                    <code>&lt;C-c&gt;</code>
-                    <span>Copy as code snippet</span>
-                </div>
-                <div class="keymap-item">
-                    <code>&lt;Tab&gt;</code> / <code>&lt;S-Tab&gt;</code>
-                    <span>Multi-select</span>
-                </div>
-                <div class="keymap-item">
-                    <code>&lt;C-a&gt;</code>
-                    <span>Run all selected</span>
-                </div>
-            </div>
-            <h3>Filter syntax</h3>
-            <div class="filter-syntax">
-                <p><code>method:GET</code> — filter by method</p>
-                <p><code>tag:auth</code> — filter by tag</p>
-                <p><code>fav:true</code> — filter favorites only</p>
-            </div>
-        </div>
-    </section>
+                <p class="hd">Request picker actions</p>
+                <table class="tbl">
+                    <thead>
+                        <tr><th>Key</th><th>Action</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><kbd>&lt;CR&gt;</kbd></td><td>Send request</td></tr>
+                        <tr><td><kbd>&lt;C-o&gt;</kbd></td><td>Go to request in file</td></tr>
+                        <tr><td><kbd>&lt;C-f&gt;</kbd></td><td>Toggle favorite</td></tr>
+                        <tr><td><kbd>&lt;C-s&gt;</kbd></td><td>Copy as curl</td></tr>
+                        <tr><td><kbd>&lt;C-c&gt;</kbd></td><td>Copy as code snippet</td></tr>
+                        <tr><td><kbd>&lt;Tab&gt;</kbd> / <kbd>&lt;S-Tab&gt;</kbd></td><td>Multi-select</td></tr>
+                        <tr><td><kbd>&lt;C-a&gt;</kbd></td><td>Run all selected</td></tr>
+                    </tbody>
+                </table>
 
-    <section class="collections" id="collections">
-        <div class="collections-inner">
-            <h2>Collections & Templates</h2>
-            <div class="collections-content">
-                <div class="collections-section">
-                    <h3>Collections</h3>
-                    <p>Organize requests in <code>*.http.collections/</code> directories. Collections are git-friendly and can have their own env files.</p>
+                <p class="hd">Filter syntax</p>
+                <p>Search filters behave like Telescope queries. Prefix a term to narrow by a property:</p>
+                <div class="filter-row">
+                    <code>method:GET</code><span>filter by method</span>
+                    <code>tag:auth</code><span>filter by tag</span>
+                    <code>fav:true</code><span>favorites only</span>
+                </div>
+            </section>
+
+            <section id="keymaps" class="section">
+                <h2><span class="sec-num">§5</span>Keymaps</h2>
+                <p>Default keymaps in <code>.http</code> files, under the <code>&lt;leader&gt;i</code> group. All are configurable — see <a href="#configuration">Configuration</a>.</p>
+                <table class="tbl">
+                    <thead>
+                        <tr><th>Key</th><th>Action</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><kbd>&lt;leader&gt;is</kbd> / <kbd>&lt;CR&gt;</kbd></td><td>Send request under cursor</td></tr>
+                        <tr><td><kbd>&lt;leader&gt;il</kbd></td><td>Request picker</td></tr>
+                        <tr><td><kbd>&lt;leader&gt;ia</kbd></td><td>Run all requests</td></tr>
+                        <tr><td><kbd>&lt;leader&gt;ic</kbd></td><td>Cancel in-flight requests</td></tr>
+                        <tr><td><kbd>&lt;leader&gt;ik</kbd></td><td>Keymap help float</td></tr>
+                        <tr><td><kbd>&lt;leader&gt;ih</kbd></td><td>History picker</td></tr>
+                        <tr><td><kbd>&lt;leader&gt;ie</kbd></td><td>Environment picker</td></tr>
+                        <tr><td><kbd>&lt;leader&gt;iv</kbd></td><td>Show resolved variables</td></tr>
+                        <tr><td><kbd>&lt;leader&gt;ir</kbd></td><td>Toggle response window</td></tr>
+                        <tr><td><kbd>&lt;leader&gt;iq</kbd></td><td>Command picker</td></tr>
+                        <tr><td><kbd>&lt;leader&gt;it</kbd></td><td>Template picker</td></tr>
+                        <tr><td><kbd>&lt;leader&gt;ib</kbd></td><td>Collection picker</td></tr>
+                        <tr><td><kbd>]r</kbd> / <kbd>[r</kbd></td><td>Next / previous request</td></tr>
+                        <tr><td><kbd>gx</kbd></td><td>Open request URL in browser</td></tr>
+                    </tbody>
+                </table>
+                <p class="note">In insert mode, <code>&lt;C-x&gt;&lt;C-o&gt;</code> completes <code>{{var}}</code> placeholders from request, env, and dynamic values.</p>
+            </section>
+
+            <section id="commands" class="section">
+                <h2><span class="sec-num">§6</span>Commands</h2>
+                <table class="tbl">
+                    <thead>
+                        <tr><th>Command</th><th>Action</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><code>:Tuiter</code></td><td>Open request picker</td></tr>
+                        <tr><td><code>:TuiterRun [lnum]</code></td><td>Send request under cursor</td></tr>
+                        <tr><td><code>:TuiterRunAll</code></td><td>Run all requests, show summary</td></tr>
+                        <tr><td><code>:TuiterCancel</code></td><td>Cancel in-flight requests</td></tr>
+                        <tr><td><code>:TuiterSaveBody</code></td><td>Save last response body to a file</td></tr>
+                        <tr><td><code>:TuiterHistory</code></td><td>Browse request history</td></tr>
+                        <tr><td><code>:TuiterEnv</code></td><td>Select environment</td></tr>
+                        <tr><td><code>:TuiterResponse</code></td><td>Toggle response window</td></tr>
+                        <tr><td><code>:TuiterCopyAs [lang]</code></td><td>Copy request as code snippet</td></tr>
+                        <tr><td><code>:TuiterStream</code></td><td>Stream SSE request</td></tr>
+                        <tr><td><code>:TuiterWatch [sec]</code></td><td>Re-run request every N seconds</td></tr>
+                        <tr><td><code>:TuiterJUnit [path]</code></td><td>Export results as JUnit XML</td></tr>
+                        <tr><td><code>:TuiterCI</code></td><td>Run all + exit on failure (CI)</td></tr>
+                        <tr><td><code>:TuiterScaffold</code></td><td>Open scaffolded <code>.http</code> buffer</td></tr>
+                        <tr><td><code>:TuiterFormat</code></td><td>Pretty-print request body JSON</td></tr>
+                        <tr><td><code>:TuiterImportPostman [file]</code></td><td>Convert Postman collection to <code>.http</code></td></tr>
+                        <tr><td><code>:TuiterImportOpenapi [file]</code></td><td>Convert OpenAPI spec to <code>.http</code></td></tr>
+                        <tr><td><code>:TuiterImportCurl</code></td><td>Paste curl command → new buffer</td></tr>
+                        <tr><td><code>:TuiterCollection [new|add|list]</code></td><td>Manage request collections</td></tr>
+                        <tr><td><code>:TuiterSnippet [list|save|insert]</code></td><td>Manage request templates</td></tr>
+                    </tbody>
+                </table>
+                <p class="note">Any command is also reachable through the <a href="#telescope">Command picker</a> (<kbd>&lt;leader&gt;iq</kbd>).</p>
+            </section>
+
+            <section id="collections" class="section">
+                <h2><span class="sec-num">§7</span>Collections &amp; Templates</h2>
+
+                <p class="hd">Collections</p>
+                <p>Organize requests in <code>*.http.collections/</code> directories — plain folders, git-friendly, with their own env files. A collection's <code>collection.env.json</code> overrides root-level env files.</p>
+                <figure class="code-fig">
+                    <div class="code-head"><span>Commands</span></div>
                     <pre><code>:TuiterCollection new my-api    # create my-api.http.collections/
 :TuiterCollection add           # add current file to a collection
 :TuiterCollection list          # list all collections</code></pre>
-                    <p>Collection-specific env files (<code>collection.env.json</code>) override root-level env files.</p>
-                </div>
-                <div class="templates-section">
-                    <h3>Templates</h3>
-                    <p>Save and reuse request patterns. Built-in templates include GET, POST, PUT, DELETE, auth, pagination, GraphQL, health check, and login flow.</p>
-                    <pre><code>:TuiterSnippet list             # show all templates
-:TuiterSnippet save my-template # save current request as template
-:TuiterSnippet insert           # insert a template at cursor</code></pre>
-                </div>
-            </div>
-        </div>
-    </section>
+                </figure>
 
-    <section class="tags" id="tags">
-        <div class="tags-inner">
-            <h2>Request Tags</h2>
-            <div class="tags-content">
-                <p>Tag requests for filtering:</p>
-                <pre><code>### Login
+                <p class="hd">Templates</p>
+                <p>Save and reuse request patterns. Ten built-in templates ship out of the box — GET, POST, PUT, DELETE, auth bearer, pagination, GraphQL, health check, and a login flow. Custom templates are saved under <code>stdpath("data")/tuiter/templates/</code>.</p>
+                <figure class="code-fig">
+                    <div class="code-head"><span>Commands</span></div>
+                    <pre><code>:TuiterSnippet list             # show all templates
+:TuiterSnippet save my-template # save current request as a template
+:TuiterSnippet insert           # insert a template at the cursor</code></pre>
+                </figure>
+                <p class="note">Templates support a <code>{{cursor}}</code> placeholder — the cursor lands there after insertion.</p>
+            </section>
+
+            <section id="tags" class="section">
+                <h2><span class="sec-num">§8</span>Request tags</h2>
+                <p>Tag requests to filter them from any picker. Use a <code>tag:</code> prefix in the prompt.</p>
+                <figure class="code-fig">
+                    <div class="code-head"><span>requests.http</span></div>
+                    <pre><code>### Login
 # @tag auth,critical
 POST https://api.example.com/login
 Content-Type: application/json
 
 {"email": "user@example.com", "password": "secret"}</code></pre>
-                <p>Filter by tag in the sidebar: <code>tag:auth</code> shows only requests tagged with "auth".</p>
-            </div>
-        </div>
-    </section>
+                </figure>
+                <p class="note">Typing <code>tag:auth</code> in the request picker narrows the list to requests tagged <code>auth</code>.</p>
+            </section>
 
-    <section class="config" id="configuration">
-        <div class="config-inner">
-            <h2>Configuration</h2>
-            <pre><code>{
+            <section id="configuration" class="section">
+                <h2><span class="sec-num">§9</span>Configuration</h2>
+                <figure class="code-fig">
+                    <div class="code-head"><span>opts</span></div>
+                    <pre><code>{
   opts = {
-    keymaps = {
+    keymaps = {                  -- false disables a key
       run = "&lt;leader&gt;is", list = "&lt;leader&gt;il", run_all = "&lt;leader&gt;ia",
       cancel = "&lt;leader&gt;ic", help = "&lt;leader&gt;ik",
       history = "&lt;leader&gt;ih", env = "&lt;leader&gt;ie", response = "&lt;leader&gt;ir",
       vars = "&lt;leader&gt;iv", browser = "gx",
     },
-    curl = { timeout = 30, insecure = false, max_redirects = 8, cookie_jar = true, compressed = true },
+    curl = {
+      timeout = 30, insecure = false, max_redirects = 8,
+      cookie_jar = true, compressed = true,
+    },
     env_files = { "http-client.env.json", "tuiter.env.json" },
     default_env = "default",
     run_all = { concurrency = 1, delay = 150 },
     windows = {
-      layout = "float", -- "float" or "split"
+      layout = "float",          -- "float" or "split"
       response_side = "right",
       width = 120, max_height = 40, sidebar_width = 62,
     },
   },
 }</code></pre>
-        </div>
-    </section>
+                </figure>
 
-    <footer class="footer">
-        <div class="footer-inner">
-            <p>Built for Neovim developers who want to stay in their editor.</p>
-            <p class="footer-links">
-                <a href="https://github.com/TheNeovimmer/tuiter">GitHub</a>
-                <a href="https://github.com/TheNeovimmer/tuiter/issues">Issues</a>
-            </p>
-        </div>
-    </footer>
+                <p class="hd">Layout modes</p>
+                <dl class="def-list">
+                    <dt><code>layout = "float"</code> <span class="default">default</span></dt>
+                    <dd>Sidebar and response open as floating windows. Fast for spot-checking — send, respond, dismiss.</dd>
+                    <dt><code>layout = "split"</code></dt>
+                    <dd>Real <code>vsplit</code> panes. A 3-pane layout — <code>[.http] [sidebar] [response]</code> — stays visible while you edit.</dd>
+                </dl>
+
+                <p class="hd">Keymap config</p>
+                <p>Move or drop keymaps with <code>opts.keymaps</code>. Setting one to <code>false</code> disables it; <code>keymaps = false</code> disables them all.</p>
+                <figure class="code-fig">
+                    <div class="code-head"><span>Remap example</span></div>
+                    <pre><code>opts = {
+  keymaps = {
+    run = "&lt;leader&gt;xr", list = "&lt;leader&gt;xl", cancel = false,
+  },
+}</code></pre>
+                </figure>
+            </section>
+
+            <footer class="foot">
+                <p>tuiter — an API explorer for Neovim. Built by <a href="https://github.com/TheNeovimmer">TheNeovimmer</a>.</p>
+            </footer>
+        </main>
+    </div>
 </body>
 </html>
