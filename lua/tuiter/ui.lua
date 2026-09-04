@@ -30,6 +30,10 @@ local M = {
 		resp_split_buf = nil, -- response split buffer (split mode)
 		resp_tab_win = nil, -- response tab bar split (split mode)
 		resp_tab_buf = nil, -- response tab bar buffer (split mode)
+		spinner_win = nil, -- loading spinner window
+		spinner_buf = nil,
+		spinner_timer = nil, -- uv timer for spinner animation
+		spinner_idx = 1,
 	},
 }
 
@@ -53,6 +57,18 @@ vim.api.nvim_set_hl(0, "TuiterUrl", { default = true, fg = "#79c0ff" })
 vim.api.nvim_set_hl(0, "TuiterSection", { link = "Title" })
 vim.api.nvim_set_hl(0, "TuiterVar", { default = true, fg = "#f0c674" })
 vim.api.nvim_set_hl(0, "TuiterHeaderKey", { default = true, fg = "#79c0ff" })
+-- UI polish highlights
+vim.api.nvim_set_hl(0, "TuiterTabActive", { default = true, bold = true })
+vim.api.nvim_set_hl(0, "TuiterTabInactive", { default = true, fg = "#636e7b" })
+vim.api.nvim_set_hl(0, "TuiterBadge2xx", { default = true, fg = "#0d1117", bg = "#3fb950", bold = true })
+vim.api.nvim_set_hl(0, "TuiterBadge3xx", { default = true, fg = "#0d1117", bg = "#d29922", bold = true })
+vim.api.nvim_set_hl(0, "TuiterBadge4xx", { default = true, fg = "#0d1117", bg = "#f85149", bold = true })
+vim.api.nvim_set_hl(0, "TuiterBadge5xx", { default = true, fg = "#f0f6fc", bg = "#da3633", bold = true })
+vim.api.nvim_set_hl(0, "TuiterMethodPill", { default = true, fg = "#0d1117", bold = true })
+vim.api.nvim_set_hl(0, "TuiterFooter", { default = true, fg = "#636e7b", bg = "#161b22" })
+vim.api.nvim_set_hl(0, "TuiterFooterKey", { default = true, fg = "#79c0ff", bg = "#161b22" })
+vim.api.nvim_set_hl(0, "TuiterSpinner", { link = "Constant" })
+vim.api.nvim_set_hl(0, "TuiterSep", { default = true, fg = "#30363d" })
 
 local METHOD_HL = {
 	GET = "TuiterGet",
@@ -62,32 +78,42 @@ local METHOD_HL = {
 	DELETE = "TuiterDelete",
 }
 
-local HELP_SECTIONS = {
-	{
-		"sidebar",
-		"q close  <CR> run (stays open)  g go-to-file  * favorite  / filter  e env  a run all  c copy curl  ? help",
-	},
-	{
-		"response",
-		"q close  1/2/3/4 or t tabs (body/headers/timeline/tests)  p pretty/raw  y copy  c copy-curl  C copy-snippet  f save  z zoom  r resend  D diff  J jq  o open-in-tab  ]k/[k json keys  P json-path  V json-value  U copy-url  gx open URL  ? help",
-	},
-	{
-		"buffer",
-		"<leader>is/<CR> send  <leader>iv vars  <leader>il sidebar  <leader>ia run all  <leader>ic cancel  <leader>ik help  <leader>ir response toggle  ]r/[r next/prev  <leader>ih history  <leader>ie env  gx open URL  :TuiterCopyAs lang",
-	},
+local METHOD_BG = {
+	GET = "#3fb950",
+	POST = "#79c0ff",
+	PUT = "#d29922",
+	PATCH = "#d29922",
+	DELETE = "#f85149",
 }
+
+--- Return a status badge highlight group based on HTTP status code.
+local function status_badge_hl(code)
+	if code >= 200 and code < 300 then
+		return "TuiterBadge2xx"
+	elseif code >= 300 and code < 400 then
+		return "TuiterBadge3xx"
+	elseif code >= 400 and code < 500 then
+		return "TuiterBadge4xx"
+	else
+		return "TuiterBadge5xx"
+	end
+end
+
+--- Render a compact status badge: " 200 " with colored background.
+local function fmt_status_badge(code)
+	return string.format(" %d ", code)
+end
 
 local function is_valid(w)
 	return w and vim.api.nvim_win_is_valid(w)
 end
 
-local function layout_mode()
-	local ok, cfg = pcall(require, "tuiter")
-	if ok and cfg.opts then
-		local o = cfg.opts()
-		return (o.windows or {}).layout or "float"
-	end
-	return "float"
+local function mk_buf()
+	local buf = vim.api.nvim_create_buf(false, true)
+	vim.bo[buf].bufhidden = "wipe"
+	vim.bo[buf].buftype = "nofile"
+	vim.bo[buf].swapfile = false
+	return buf
 end
 
 local function trunc(s, n)
@@ -104,6 +130,97 @@ local function fmt_size(n)
 		return string.format("%.1fKB", n / 1024)
 	end
 	return string.format("%.1fMB", n / 1024 / 1024)
+end
+
+-- ---------------------------------------------------------------------------
+-- Loading spinner
+-- ---------------------------------------------------------------------------
+
+local SPINNERS = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" }
+
+--- Show a loading spinner in a small float. Displays "METHOD url …" with an
+--- animated spinner character. Auto-closes when the response arrives.
+function M.show_spinner(spec)
+	M.close_spinner()
+	local buf = mk_buf()
+	vim.bo[buf].modifiable = true
+	local line = string.format("  %s %s …", spec.method or "?", trunc(spec.url or "", 50))
+	vim.api.nvim_buf_set_lines(buf, 0, -1, false, { line })
+	vim.bo[buf].modifiable = false
+	local width = #line + 2
+	local win = vim.api.nvim_open_win(buf, false, {
+		relative = "editor",
+		width = width,
+		height = 1,
+		row = vim.o.lines - 3,
+		col = vim.o.columns - width - 2,
+		border = "none",
+		style = "minimal",
+		focusable = false,
+		zindex = 100,
+	})
+	vim.wo[win].winblend = 10
+	M.state.spinner_win, M.state.spinner_buf = win, buf
+	-- animate
+	M.state.spinner_idx = 1
+	M.state.spinner_timer = vim.uv.new_timer()
+	M.state.spinner_timer:start(0, 80, vim.schedule_wrap(function()
+		if not is_valid(win) then
+			M.close_spinner()
+			return
+		end
+		M.state.spinner_idx = (M.state.spinner_idx % #SPINNERS) + 1
+		local ch = SPINNERS[M.state.spinner_idx]
+		pcall(vim.api.nvim_buf_set_lines, buf, 0, 1, false, {
+			string.format(" %s %s %s", ch, spec.method or "?", trunc(spec.url or "", 50))
+		})
+	end))
+end
+
+--- Close the loading spinner.
+function M.close_spinner()
+	if M.state.spinner_timer then
+		pcall(M.state.spinner_timer.stop, M.state.spinner_timer)
+		pcall(M.state.spinner_timer.close, M.state.spinner_timer)
+		M.state.spinner_timer = nil
+	end
+	if is_valid(M.state.spinner_win) then
+		pcall(vim.api.nvim_win_close, M.state.spinner_win, true)
+	end
+	M.state.spinner_win, M.state.spinner_buf = nil, nil
+end
+
+local HELP_SECTIONS = {
+	{
+		"sidebar",
+		"q close  <CR> run (stays open)  g go-to-file  * favorite  / filter  e env  a run all  c copy curl  ? help",
+	},
+	{
+		"response",
+		"q close  1/2/3/4 or t tabs (body/headers/timeline/tests)  p pretty/raw  y copy  c copy-curl  C copy-snippet  f save  z zoom  r resend  D diff  J jq  o open-in-tab  ]k/[k json keys  P json-path  V json-value  U copy-url  gx open URL  ? help",
+	},
+	{
+		"buffer",
+		"<leader>is/<CR> send  <leader>iv vars  <leader>il sidebar  <leader>ia run all  <leader>ic cancel  <leader>ik help  <leader>ir response toggle  ]r/[r next/prev  <leader>ih history  <leader>ie env  gx open URL  :TuiterCopyAs lang",
+	},
+}
+
+local function layout_mode()
+	local ok, cfg = pcall(require, "tuiter")
+	if ok and cfg.opts then
+		local o = cfg.opts()
+		return (o.windows or {}).layout or "float"
+	end
+	return "float"
+end
+
+local function is_compact()
+	local ok, cfg = pcall(require, "tuiter")
+	if ok and cfg.opts then
+		local o = cfg.opts()
+		return (o.windows or {}).compact or false
+	end
+	return false
 end
 
 local function is_json(resp)
@@ -137,14 +254,6 @@ local function body_filetype(resp)
 		return "javascript"
 	end
 	return nil
-end
-
-local function mk_buf()
-	local buf = vim.api.nvim_create_buf(false, true)
-	vim.bo[buf].bufhidden = "wipe"
-	vim.bo[buf].buftype = "nofile"
-	vim.bo[buf].swapfile = false
-	return buf
 end
 
 local function buf_map(buf, lhs, rhs, desc)
@@ -193,6 +302,7 @@ end
 -- ---------------------------------------------------------------------------
 
 function M.close()
+	M.close_spinner()
 	-- close float windows
 	for _, w in ipairs({ M.state.head_win, M.state.body_win }) do
 		if is_valid(w) then
@@ -283,57 +393,60 @@ local function render_tabs()
 	end
 	local buf = vim.api.nvim_win_get_buf(M.state.head_win)
 	local width = vim.api.nvim_win_get_width(M.state.head_win)
-	-- colored method badge
+	-- method dot + name
 	local method = spec.method or ""
-	local method_badge = method ~= "" and ("[" .. method .. "] ") or ""
-	local line = " " .. method_badge
+	local method_dot = method ~= "" and ("● ") or ""
+	local line = " " .. method_dot .. method .. "  "
+	-- tab names (active = uppercase, inactive = lowercase)
 	for i, name in ipairs(TAB_NAMES) do
 		if i > 1 then
 			line = line .. " │ "
 		end
-		line = line .. name
+		line = line .. (i == M.state.tab and name:upper() or name:lower())
 	end
-	local reason = resp.headers:match("^HTTP/%S+ %d+ ([^\r\n]*)") or ""
-	local ok = resp.ok and resp.status < 400
-	local status
+	-- status badge + timing
+	local badge = ""
 	if resp.status > 0 then
-		status = string.format(
-			"%d%s · %dms · %s",
-			resp.status,
-			reason ~= "" and (" " .. reason) or "",
-			(resp.time or 0) * 1000,
-			fmt_size(resp.size)
-		)
+		badge = fmt_status_badge(resp.status)
 	elseif resp.error and resp.error ~= "" then
-		status = "✗ " .. trunc(resp.error, 60)
-	else
-		status = "no response"
+		badge = " ERR "
 	end
-	if #line + #status + 3 < width then
-		line = line .. string.rep(" ", width - #line - #status) .. status
+	local timing = string.format("%dms", (resp.time or 0) * 1000)
+	local size = fmt_size(resp.size)
+	local right = badge .. " " .. timing .. " · " .. size
+	if #line + #right + 3 < width then
+		line = line .. string.rep(" ", width - #line - #right) .. right
 	end
 	vim.bo[buf].modifiable = true
 	vim.api.nvim_buf_set_lines(buf, 0, -1, false, { line })
 	vim.bo[buf].modifiable = false
-	-- highlight method badge
+	-- highlight method dot + name
 	if method ~= "" then
-		local badge = "[" .. method .. "]"
-		local mpos = line:find(badge, 1, true)
-		if mpos then
-			vim.api.nvim_buf_add_highlight(buf, -1, METHOD_HL[method] or "Comment", 0, mpos - 1, mpos - 1 + #badge)
+		local dot_pos = line:find("●", 1, true)
+		if dot_pos then
+			vim.api.nvim_buf_add_highlight(buf, -1, METHOD_HL[method] or "Comment", 0, dot_pos - 1, dot_pos + 1)
+		end
+		local method_end = line:find(method, dot_pos and dot_pos or 1, true)
+		if method_end then
+			vim.api.nvim_buf_add_highlight(buf, -1, METHOD_HL[method] or "Comment", 0, method_end - 1, method_end - 1 + #method)
 		end
 	end
 	-- highlight tab names
 	local pos = 1
 	for i, name in ipairs(TAB_NAMES) do
-		local seg = (i > 1 and " │ " or " ") .. name
-		vim.api.nvim_buf_add_highlight(buf, -1, i == M.state.tab and "TabLineSel" or "TabLine", 0, pos, pos + #seg)
+		local seg = (i > 1 and " │ " or " ") .. (i == M.state.tab and name:upper() or name:lower())
+		local hl = i == M.state.tab and "TuiterTabActive" or "TuiterTabInactive"
+		vim.api.nvim_buf_add_highlight(buf, -1, hl, 0, pos, pos + #seg)
 		pos = pos + #seg
 	end
-	-- highlight status
-	local stpos = line:find(status, 1, true)
-	if stpos then
-		vim.api.nvim_buf_add_highlight(buf, -1, ok and "TuiterOk" or "TuiterError", 0, stpos - 1, stpos - 1 + #status)
+	-- highlight status badge
+	if badge ~= "" then
+		local bpos = line:find(badge, 1, true)
+		if bpos then
+			local code = tonumber(badge:match("%d+"))
+			local hl = code and status_badge_hl(code) or "TuiterStatusErr"
+			vim.api.nvim_buf_add_highlight(buf, -1, hl, 0, bpos - 1, bpos - 1 + #badge)
+		end
 	end
 end
 
@@ -463,67 +576,65 @@ end
 local function render_tab_line(resp, spec)
 	local reason = resp.headers:match("^HTTP/%S+ %d+ ([^\r\n]*)") or ""
 	local ok = resp.ok and resp.status < 400
-	-- colored method badge (e.g. [GET])
+	-- method dot (colored circle before method name)
 	local method = (spec and spec.method) or ""
-	local method_badge = method ~= "" and ("[" .. method .. "] ") or ""
+	local method_dot = method ~= "" and ("● ") or ""
 	-- tab names with solid separators
 	local tab_part = ""
 	for i, name in ipairs(TAB_NAMES) do
 		if i > 1 then
 			tab_part = tab_part .. " │ "
 		end
-		tab_part = tab_part .. name
+		tab_part = tab_part .. (i == M.state.tab and name:upper() or name:lower())
 	end
-	-- URL (truncated)
-	local url = spec and spec.url or ""
-	local url_part = url ~= "" and ("  " .. trunc(url, 40)) or ""
-	local status
+	-- status badge
+	local badge = ""
 	if resp.status > 0 then
-		status = string.format(
-			"%d%s · %dms · %s",
-			resp.status,
-			reason ~= "" and (" " .. reason) or "",
-			(resp.time or 0) * 1000,
-			fmt_size(resp.size)
-		)
+		badge = fmt_status_badge(resp.status)
 	elseif resp.error and resp.error ~= "" then
-		status = "✗ " .. resp.error
-	else
-		status = "no response"
+		badge = " ERR "
 	end
-	local line = " " .. method_badge .. tab_part .. url_part
+	-- timing
+	local timing = string.format("%dms", (resp.time or 0) * 1000)
+	local size = fmt_size(resp.size)
+	local line = " " .. method_dot .. method .. "  " .. tab_part
 	local win = M.state.resp_split_win
 	local width = win and vim.api.nvim_win_get_width(win) or 80
-	if #line + #status + 3 < width then
-		line = line .. string.rep(" ", width - #line - #status) .. status
+	-- right-align: badge + timing + size
+	local right = badge .. " " .. timing .. " · " .. size
+	if #line + #right + 3 < width then
+		line = line .. string.rep(" ", width - #line - #right) .. right
 	end
-	return line, ok, status, method
+	return line, ok, badge, method
 end
 
-local function highlight_tab_line(buf, line, resp, method)
-	local ok = resp.ok and resp.status < 400
-	-- highlight method badge (e.g. [GET])
+local function highlight_tab_line(buf, line, resp, method, badge)
+	-- highlight method dot + name
 	if method and method ~= "" then
-		local badge = "[" .. method .. "]"
-		local mpos = line:find(badge, 1, true)
-		if mpos then
-			vim.api.nvim_buf_add_highlight(buf, -1, METHOD_HL[method] or "Comment", 0, mpos - 1, mpos - 1 + #badge)
+		local dot_pos = line:find("●", 1, true)
+		if dot_pos then
+			vim.api.nvim_buf_add_highlight(buf, -1, METHOD_HL[method] or "Comment", 0, dot_pos - 1, dot_pos + 1)
+		end
+		local method_end = line:find(method, dot_pos and dot_pos or 1, true)
+		if method_end then
+			vim.api.nvim_buf_add_highlight(buf, -1, METHOD_HL[method] or "Comment", 0, method_end - 1, method_end - 1 + #method)
 		end
 	end
-	-- highlight tab names
+	-- highlight tab names (active = bold, inactive = dim)
 	local pos = 1
 	for i, name in ipairs(TAB_NAMES) do
-		local seg = (i > 1 and " │ " or " ") .. name
-		local hl = i == M.state.tab and "TabLineSel" or "TabLine"
+		local seg = (i > 1 and " │ " or " ") .. (i == M.state.tab and name:upper() or name:lower())
+		local hl = i == M.state.tab and "TuiterTabActive" or "TuiterTabInactive"
 		vim.api.nvim_buf_add_highlight(buf, -1, hl, 0, pos, pos + #seg)
 		pos = pos + #seg
 	end
-	-- highlight status
-	local status = line:match("([^ ]%d%d%d[^ ]*)$") or line:match("(✗.*)$")
-	if status then
-		local stpos = line:find(status, 1, true)
-		if stpos then
-			vim.api.nvim_buf_add_highlight(buf, -1, ok and "TuiterOk" or "TuiterError", 0, stpos - 1, stpos - 1 + #status)
+	-- highlight status badge
+	if badge and badge ~= "" then
+		local bpos = line:find(badge, 1, true)
+		if bpos then
+			local code = tonumber(badge:match("%d+"))
+			local hl = code and status_badge_hl(code) or "TuiterStatusErr"
+			vim.api.nvim_buf_add_highlight(buf, -1, hl, 0, bpos - 1, bpos - 1 + #badge)
 		end
 	end
 end
@@ -538,10 +649,10 @@ local function render_split_content()
 	vim.bo[buf].modifiable = true
 	-- read existing tab line (line 1)
 	local tab_line = vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1] or ""
-	local new_tab_line, ok, status, method = render_tab_line(resp, M.state.last and M.state.last.spec)
+	local new_tab_line, ok, badge, method = render_tab_line(resp, M.state.last and M.state.last.spec)
 	if new_tab_line ~= tab_line then
 		vim.api.nvim_buf_set_lines(buf, 0, 1, false, { new_tab_line })
-		highlight_tab_line(buf, new_tab_line, resp, method)
+		highlight_tab_line(buf, new_tab_line, resp, method, badge)
 	end
 	-- build the content lines for the current tab
 	local content_lines = {}
@@ -600,7 +711,7 @@ local function render_split_content()
 		new_lines[#new_lines + 1] = l
 	end
 	vim.api.nvim_buf_set_lines(buf, 0, -1, false, new_lines)
-	highlight_tab_line(buf, new_tab_line, resp, method)
+	highlight_tab_line(buf, new_tab_line, resp, method, badge)
 	-- filetype + treesitter for body tab
 	if M.state.tab == 1 then
 		local ft = M.state.display and M.state.display.json and "json" or body_filetype(resp)
@@ -650,46 +761,51 @@ local function set_statusline(win, resp, spec)
 	local reason = resp.headers:match("^HTTP/%S+ %d+ ([^\r\n]*)") or ""
 	local ok = resp.ok and resp.status < 400
 	local hl = ok and "TuiterStatusOk" or "TuiterStatusErr"
-	local env = spec.env and (" · env:" .. spec.env) or ""
 	local method_hl = METHOD_HL[spec.method] or "Comment"
-	-- encoding (e.g. gzip, br, identity)
+	-- encoding
 	local encoding = resp.headers:lower():match("content%-encoding:%s*(%S+)") or ""
 	local enc_part = encoding ~= "" and (" · " .. encoding) or ""
 	-- content-type short form
 	local ct = content_type(resp)
 	local ct_short = ct:match("([^/]+)$") or ct
 	local ct_part = ct ~= "" and (" · " .. ct_short) or ""
-	local status
+	-- env
+	local env = spec.env and (" · " .. spec.env) or ""
+	-- status badge
+	local badge = ""
 	if resp.status > 0 then
-		status = string.format(
-			"%d%s",
-			resp.status,
-			reason ~= "" and (" " .. reason) or ""
-		)
+		badge = fmt_status_badge(resp.status)
 	elseif resp.error and resp.error ~= "" then
-		status = "✗ " .. resp.error
-	else
-		status = "no response"
+		badge = " ERR "
 	end
-	vim.wo[win].statusline = string.format(
-		"%%#%s# %s %%#%s#%s %%#%s# %s · %dms · %s%s%s%s %%*",
-		hl,
+	-- timing + size
+	local timing = string.format("%dms", (resp.time or 0) * 1000)
+	local size = fmt_size(resp.size)
+	-- key hints (compact)
+	local hints = "q quit │ 1-4 tabs │ p pretty │ y copy │ r retry │ D diff"
+	vim.wo[win].statusline = table.concat({
+		"%#TuiterStatusHint#",
+		" ",
 		spec.method,
-		method_hl,
-		trunc(spec.url, 40),
-		hl,
-		status,
-		(resp.time or 0) * 1000,
-		fmt_size(resp.size),
-		enc_part,
-		ct_part,
-		env
-	)
+		" %*",
+		"%#TuiterUrl#",
+		trunc(spec.url, 35),
+		" %*",
+		"%#" .. (ok and "TuiterStatusOk" or "TuiterStatusErr") .. "#",
+		badge,
+		" %*",
+		timing .. " · " .. size .. enc_part .. ct_part .. env,
+		" │ ",
+		"%#TuiterFooterKey#",
+		hints,
+		"%*",
+	}, "")
 end
 
 --- Show a response. opts: { resend = fn, copy_curl = fn }
 function M.show(resp, spec, opts)
 	opts = opts or {}
+	M.close_spinner() -- dismiss loading spinner
 	M.state.prev = M.state.last -- save for diff-vs-previous
 	M.state.last = { resp = resp, spec = spec, opts = opts }
 	if opts.buf then
@@ -719,9 +835,9 @@ function M.show(resp, spec, opts)
 		pcall(vim.api.nvim_win_set_width, body_win, math.min(resp_width, vim.o.columns - 4))
 		-- tab bar as first line in the same buffer
 		vim.bo[body_buf].modifiable = true
-		local tab_line = render_tab_line(resp, spec)
+		local tab_line, _, badge = render_tab_line(resp, spec)
 		vim.api.nvim_buf_set_lines(body_buf, 0, 0, false, { tab_line, "" })
-		highlight_tab_line(body_buf, tab_line, resp, spec.method)
+		highlight_tab_line(body_buf, tab_line, resp, spec.method, badge)
 		vim.bo[body_buf].modifiable = false
 		set_statusline(body_win, resp, spec)
 		M.state.resp_split_win, M.state.resp_split_buf = body_win, body_buf
@@ -1029,6 +1145,8 @@ end
 --- is stored in the same table as result marks, so mark_response replaces it
 --- when the response lands (instant feedback instead of silence while waiting).
 function M.mark_running(spec)
+	-- show loading spinner in response area
+	M.show_spinner(spec)
 	local buf = spec.buf
 	if not buf or not vim.api.nvim_buf_is_valid(buf) or not spec.line or spec.line < 1 then
 		return
@@ -1566,7 +1684,7 @@ function M.show_sidebar(requests, opts)
 		-- separator between favorites and non-favorites
 		if in_favs and not M.state.favs[r.url] and nonfav_count > 0 and fav_count > 0 then
 			lines[#lines + 1] = string.rep("─", 56)
-			vim.api.nvim_buf_add_highlight(buf, -1, "Comment", #lines - 1, 0, -1)
+			vim.api.nvim_buf_add_highlight(buf, -1, "TuiterSep", #lines - 1, 0, -1)
 			in_favs = false
 		end
 		local st = M.state.results[r.url]
@@ -1631,8 +1749,9 @@ function M.show_sidebar(requests, opts)
 		vim.wo[win].relativenumber = false
 		vim.wo[win].signcolumn = "no"
 		vim.wo[win].cursorline = true
-		-- window title via statusline (topleft splits don't support title)
-		vim.wo[win].statusline = "%#TuiterStatusHint# " .. title .. " %*"
+		-- window title + key hints via statusline
+		local hint = "↵ run │ ★ fav │ / filter │ e env │ a all │ ? help"
+		vim.wo[win].statusline = "%#TuiterStatusHint# " .. title .. " %*│ %#TuiterFooterKey#" .. hint .. "%*"
 	else
 		-- float mode (default)
 		win = vim.api.nvim_open_win(buf, true, {
