@@ -3,3 +3,7 @@ doc/tags
 examples/out/
 # review/agent artifact dir
 .pi-subagents/
+
+# Planning files
+plan.md
+plan-pro.md
