@@ -74,6 +74,63 @@
         document.querySelectorAll("main section[id]").forEach(function (s) { spy.observe(s); });
     }
 
+    /* ---------- Scroll reveal ---------- */
+    var reduceMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (!reduceMotion && "IntersectionObserver" in window) {
+        var revealer = new IntersectionObserver(function (entries) {
+            entries.forEach(function (entry) {
+                if (!entry.isIntersecting) return;
+                entry.target.classList.add("in");
+                revealer.unobserve(entry.target);
+            });
+        }, { threshold: 0.08, rootMargin: "0px 0px -6% 0px" });
+        document.querySelectorAll(".section, .code-fig, .tbl-wrap, .filter-item, .cap-list li, .req-list li").forEach(function (el) {
+            el.classList.add("reveal");
+            revealer.observe(el);
+        });
+    }
+
+    /* ---------- Back to top ---------- */
+    var toTop = document.getElementById("to-top");
+    function updateTop() {
+        if (!toTop) return;
+        toTop.classList.toggle("show", window.scrollY > 900);
+    }
+    window.addEventListener("scroll", function () {
+        if (!ticking) { ticking = true; window.requestAnimationFrame(function () { updateProgress(); updateTop(); }); }
+    }, { passive: true });
+    updateTop();
+    if (toTop) toTop.addEventListener("click", function () {
+        window.scrollTo({ top: 0, behavior: reduceMotion ? "auto" : "smooth" });
+    });
+
+    /* ---------- Mobile nav toggle ---------- */
+    var navToggle = document.getElementById("nav-toggle");
+    var sidebar = document.getElementById("sidebar");
+    if (navToggle && sidebar) navToggle.addEventListener("click", function () {
+        var open = sidebar.classList.toggle("open");
+        navToggle.setAttribute("aria-expanded", open ? "true" : "false");
+    });
+
+    /* ---------- Hero orb parallax (pointer only, rAF-throttled) ---------- */
+    var orb = document.getElementById("orb-a");
+    if (orb && !reduceMotion && window.matchMedia("(pointer: fine)").matches) {
+        var tx = 0, ty = 0, cx = 0, cy = 0, orbiting = false;
+        document.addEventListener("pointermove", function (e) {
+            tx = (e.clientX / window.innerWidth - 0.5) * 36;
+            ty = (e.clientY / window.innerHeight - 0.5) * 36;
+            if (!orbiting) { orbiting = true; window.requestAnimationFrame(step); }
+        }, { passive: true });
+        function step() {
+            cx += (tx - cx) * 0.08;
+            cy += (ty - cy) * 0.08;
+            orb.style.marginLeft = cx.toFixed(1) + "px";
+            orb.style.marginTop = cy.toFixed(1) + "px";
+            if (Math.abs(tx - cx) > 0.1 || Math.abs(ty - cy) > 0.1) window.requestAnimationFrame(step);
+            else orbiting = false;
+        }
+    }
+
     /* ---------- Copy buttons on code figures ---------- */
     document.querySelectorAll(".code-fig").forEach(function (fig) {
         var head = fig.querySelector(".code-head");
