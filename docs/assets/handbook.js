@@ -141,6 +141,7 @@
         btn.className = "copy-btn";
         btn.textContent = "Copy";
         btn.setAttribute("aria-label", "Copy code to clipboard");
+        btn.setAttribute("aria-live", "polite");
         btn.addEventListener("click", function () {
             var done = function (ok) {
                 btn.textContent = ok ? "Copied" : "Failed";
