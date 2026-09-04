@@ -6,6 +6,10 @@ one key, read the response in a floating window — with a request sidebar,
 collections runner, history, environments, dynamic variables, and JSON
 pretty-printing. Pure Lua, zero deps, Neovim-native.
 
+📖 **[Documentation](https://theneovimmer.github.io/tuiter)** · 
+📦 **[Install](#installation-lazyvim--lazynvim)** · 
+⚡ **[Quick start](#usage)**
+
 ## Features
 
 - **`.http` request files** — REST Client format: methods, headers, bodies, named `###` sections, `# @name`
