@@ -85,21 +85,33 @@ function M.parse_lines(lines)
 			local k, v = line:match("^#%s*@([%w%-_]+)%s*(.-)%s*$")
 			if k then
 				k = k:gsub("%-", "_")
-				if k == "name" then
-					-- handled above
-				elseif k == "test" then
-					cur.tests[#cur.tests + 1] = v
-				elseif k == "auth" then
-					local a = parse_auth(v)
-					if a then
-						cur.auth = a
-					end
-				elseif k == "base" then
-					-- a per-request # @base also becomes the file-level base
-					-- for every later request (strip a `# @base: url` colon)
-					base = v:gsub("^[=:]%s*", "")
-					cur.opts.base = base
-				else
+			if k == "name" then
+				-- handled above
+			elseif k == "test" then
+				cur.tests[#cur.tests + 1] = v
+			elseif k == "auth" then
+				local a = parse_auth(v)
+				if a then
+					cur.auth = a
+				end
+			elseif k == "base" then
+				-- a per-request # @base also becomes the file-level base
+				-- for every later request (strip a `# @base: url` colon)
+				base = v:gsub("^[=:]%s*", "")
+				cur.opts.base = base
+			elseif k == "before" or k == "lua_pre" then
+				-- pre-request Lua script: runs before the request is sent
+				if not cur.opts.scripts then
+					cur.opts.scripts = {}
+				end
+				cur.opts.scripts.before = v
+			elseif k == "after" or k == "lua_post" then
+				-- post-request Lua script: runs after the response arrives
+				if not cur.opts.scripts then
+					cur.opts.scripts = {}
+				end
+				cur.opts.scripts.after = v
+			else
 					cur.opts[k] = v == "" and true or v
 				end
 			end

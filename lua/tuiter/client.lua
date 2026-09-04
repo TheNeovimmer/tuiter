@@ -850,6 +850,58 @@ local function do_send(spec, curl_opts, cwd, cb)
 	M.state.procs[proc] = true
 end
 
+--- Run a `# @before` / `# @after` Lua script. The script runs in a sandbox
+--- with access to `request`, `response` (after only), `set_header`, `set_var`,
+--- `set_env`, and `print` (collected into notify). Returns true on success.
+local function run_script(code, context)
+	if not code or code == "" then
+		return true
+	end
+	local env = {
+		print = function(...)
+			local parts = {}
+			for i = 1, select("#", ...) do
+				parts[#parts + 1] = tostring(select(i, ...))
+			end
+			vim.notify("Tuiter script: " .. table.concat(parts, "\t"), vim.log.levels.INFO, { title = "Tuiter" })
+		end,
+		set_header = function(k, v)
+			if context.request then
+				context.request.headers = context.request.headers or {}
+				context.request.headers[k] = v
+			end
+		end,
+		set_var = function(k, v)
+			if context.request then
+				context.request.vars = context.request.vars or {}
+				context.request.vars[k] = v
+			end
+		end,
+		set_env = function(k, v)
+			M.state.env_vars[k] = v
+		end,
+		request = context.request,
+		response = context.response,
+		status = context.response and context.response.status or nil,
+		body = context.response and context.response.body or nil,
+		json = function(s)
+			return pcall(vim.json.decode, s or "")
+		end,
+	}
+	setmetatable(env, { __index = _G })
+	local fn, load_err = load(code, "@tuiter-script", "t", env)
+	if not fn then
+		vim.notify("Tuiter script error: " .. tostring(load_err), vim.log.levels.ERROR, { title = "Tuiter" })
+		return false
+	end
+	local ok, err = pcall(fn)
+	if not ok then
+		vim.notify("Tuiter script error: " .. tostring(err), vim.log.levels.ERROR, { title = "Tuiter" })
+		return false
+	end
+	return true
+end
+
 --- Send a request via curl (async).
 --- spec: { method, url, headers={k=v}, body=nil|string, vars={k=v}, auth?, tests? }
 --- Handles OAuth2/bearer auth, # @test assertions (evaluated into
@@ -865,9 +917,18 @@ function M.send(spec, curl_opts, cwd, cb)
 		end, delay)
 		return
 	end
+	-- run # @before script (can modify headers, vars)
+	local scripts = spec.opts and spec.opts.scripts
+	if scripts and scripts.before then
+		run_script(scripts.before, { request = spec })
+	end
 	local done = function(resp)
 		if resp then
 			M.eval_tests(spec.tests, resp)
+			-- run # @after script (can inspect response, set env vars)
+			if scripts and scripts.after then
+				run_script(scripts.after, { request = spec, response = resp })
+			end
 		end
 		cb(resp)
 	end
