@@ -189,16 +189,21 @@ virtual text in the buffer (`✓ 200 · 45ms` / `✗ 404 · 12ms`).
 
 ### Response window
 
-Insomnia-style: a tab bar (Body | Headers | Timeline) over the response,
-with a status bar showing `tuiter · METHOD URL · HTTP 200 OK · 123ms ·
-1.2KB · env: dev` (green when ok, red on error/4xx-5xx). The tab bar shows
-HTTP status · time · size on the right.
+Insomnia-style: a tab bar (Body | Headers | Timeline | Tests) over the
+response, with a status line showing `METHOD URL · HTTP 200 OK · 123ms ·
+1.2KB · env: dev` (green when ok, red on error/4xx-5xx). In float mode the
+tab bar is a separate window; in split mode it is the first line of the
+response buffer.
 
 While a request is in flight, its request line shows `↻ running…`; the
 mark is replaced by the ✓/✗ result when the response lands. Request
 failures (DNS, connection refused, timeout, cancel) are never silent: a
 warning toast fires, the status bar and Body tab show the curl error
 instead of an empty body, and the request line gets a `✗ error` mark.
+
+Response bodies over 200KB are truncated in the body tab with a
+`[show-all]` note — use `p` (pretty/raw) or `o` (open in tab) to see the
+full content.
 
 | Key | Action |
 |---|---|
@@ -465,14 +470,16 @@ query GetUser($id: ID!) {
 
 ## Statusline integration
 
-`require("tuiter").statusline()` returns `env: dev · HTTP 200` for the
-current environment and last response — drop it into lualine or a custom
-statusline:
+`require("tuiter").statusline()` returns `dev · HTTP 200` for the current
+environment and last response — drop it into lualine or a custom statusline:
 
 ```lua
 -- lualine
 { "tuiter.statusline", cond = function() return require("tuiter").statusline() ~= "" end }
 ```
+
+The response window statusline shows `METHOD url · HTTP code reason · time · size · env`
+(green when ok, red on error/4xx-5xx) in a single dense line.
 
 ## How it works
 
@@ -565,10 +572,26 @@ add a shared variable once in `base` instead of three times.
     env_files = { "http-client.env.json", "tuiter.env.json" },
     default_env = "default",
     run_all = { concurrency = 1, delay = 150 }, -- parallel collection runner
-    windows = { width = 120, max_height = 40, sidebar_width = 62 }, -- response float + sidebar sizing
+    windows = {
+      layout = "float", -- "float" (default) or "split" (3-pane editor layout)
+      response_side = "right",
+      width = 120, max_height = 40, sidebar_width = 62,
+    },
   },
 }
 ```
+
+### Layout modes
+
+**`layout = "float"`** (default): sidebar and response open as floating windows.
+Quick for spot-checking — `is` sends, response pops up, `q` dismisses.
+
+**`layout = "split"`**: sidebar opens as a real `topleft vsplit` with
+`winfixwidth`; response opens as a `botright vsplit`. The 3-pane layout
+([.http] [sidebar] [response]) stays visible while you edit — like Postman
+inside Neovim. Use `<leader>ir` to toggle the response split, `q` inside it
+to close. The sidebar width is controlled by `windows.sidebar_width` (default
+62); the response width by `windows.width` (default 120).
 
 Example — move everything off `<leader>i` and drop the ones you don't
 want: `opts = { keymaps = { run = "<leader>xr", list = "<leader>xl", cancel = false } }`.

@@ -87,13 +87,32 @@ function M.pick(cb)
 	vim.ui.select(h, {
 		prompt = "Tuiter history",
 		format_item = function(e)
+			-- extract {{vars}} used in the request for preview
+			local vars = {}
+			if e.spec then
+				local function collect(str)
+					if type(str) == "string" then
+						for v in str:gmatch("{{" .. "([%w_$%.]+)" .. "}}") do
+							vars[#vars + 1] = v
+						end
+					end
+				end
+				collect(e.spec.url)
+				if e.spec.headers then
+					for _, hv in pairs(e.spec.headers) do
+						collect(hv)
+					end
+				end
+				collect(e.spec.body)
+			end
+			local var_str = #vars > 0 and ("  vars: " .. table.concat(vars, ", ")) or ""
 			return string.format(
-				"%s %-6s %s  %s%s",
+				"%s %-6s %s %s%s",
 				os.date("%m-%d %H:%M", e.ts),
 				e.method,
 				e.url,
 				e.name ~= "" and ("(" .. e.name .. ") ") or "",
-				e.status and ("[HTTP " .. e.status .. "]") or ""
+				e.status and ("[" .. e.status .. "]" .. var_str) or var_str
 			)
 		end,
 	}, function(entry)

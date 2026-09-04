@@ -28,7 +28,7 @@ local config = {
 	env_files = { "http-client.env.json", "tuiter.env.json" },
 	default_env = "default",
 	run_all = { concurrency = 1, delay = 150 },
-	windows = { width = 120, max_height = 40, sidebar_width = 62 },
+	windows = { layout = "float", response_side = "right", width = 120, max_height = 40, sidebar_width = 62, compact = false },
 }
 
 ---@param opts? table
@@ -334,7 +334,7 @@ function M.select_env(opts, on_select)
 end
 
 function M.toggle_response()
-	ui.toggle()
+	ui.toggle_response()
 end
 
 --- Pick a language and copy the code snippet for `spec` (Insomnia-style).

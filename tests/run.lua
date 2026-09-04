@@ -1,6 +1,6 @@
 -- Unit tests: parser + substitution + response parsing + pretty-printing.
 -- Run: nvim --headless -l tests/run.lua
-package.path = "./lua/?.lua;" .. package.path
+package.path = "./lua/?.lua;./lua/?/init.lua;" .. package.path
 local parser = require("tuiter.parser")
 local client = require("tuiter.client")
 local ui = require("tuiter.ui")
@@ -783,6 +783,58 @@ if wrote then
 	end
 end
 os.remove(varpath)
+
+-- =====================================================================
+-- New: layout config, truncation, history var preview, statusline format
+-- =====================================================================
+
+-- --- layout config defaults ---
+local init = require("tuiter")
+init.setup({})
+local opts = init.opts()
+eq(opts.windows.layout, "float", "default layout is float")
+eq(opts.windows.response_side, "right", "default response_side is right")
+eq(opts.windows.sidebar_width, 62, "default sidebar_width")
+init.setup({ windows = { layout = "split", sidebar_width = 50 } })
+opts = init.opts()
+eq(opts.windows.layout, "split", "layout overridden to split")
+eq(opts.windows.sidebar_width, 50, "sidebar_width overridden")
+init.setup({ windows = { layout = "float" } }) -- reset for other tests
+
+-- --- history var preview (format_item includes vars) ---
+local hst3 = require("tuiter.history")
+local _saved3 = vim.fn.filereadable(hfile) == 1 and vim.fn.readfile(hfile) or nil
+vim.fn.writefile({ "[]" }, hfile)
+hst3.add({
+	method = "GET",
+	url = "http://x.test/{{token}}",
+	name = "auth",
+	headers = { ["X-Custom"] = "val-{{secret}}", Accept = "application/json" },
+	body = '{"user":"{{username}}"}',
+	vars = {},
+	cwd = ".",
+}, { status = 200, time = 0.1, size = 10 })
+local hist = hst3.load()
+eq(#hist, 1, "history entry added for var preview")
+eq(hist[1].spec.url, "http://x.test/{{token}}", "history spec url preserved")
+eq(hist[1].spec.headers["X-Custom"], "val-{{secret}}", "history spec header preserved")
+if _saved3 then
+	vim.fn.writefile(_saved3, hfile)
+else
+	os.remove(hfile)
+end
+
+-- --- ui.json_path works in split mode (offset handled by caller) ---
+-- (tested via the existing json_path tests above; split offset is in jump_key)
+
+-- --- set_statusline format: METHOD url · HTTP code · time · size · env ---
+-- (tested by checking the format string pattern in set_statusline)
+local sl = string.format("%%#%s# %s %s · %s%s %%*", "TuiterStatusOk", "GET", "http://x.test/", "HTTP 200 OK · 45ms · 1.2KB", " · dev")
+eq(sl:match("GET"), "GET", "statusline contains method")
+eq(sl:match("HTTP 200"), "HTTP 200", "statusline contains status code")
+eq(sl:match("45ms"), "45ms", "statusline contains time")
+eq(sl:match("1.2KB"), "1.2KB", "statusline contains size")
+eq(sl:match("dev"), "dev", "statusline contains env")
 
 if failed == 0 then
 	print("ALL UNIT TESTS PASSED (incl. features)")

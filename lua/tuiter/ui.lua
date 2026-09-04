@@ -5,8 +5,8 @@ local client = require("tuiter.client")
 
 local M = {
 	state = {
-		head_win = nil, -- tab bar window
-		body_win = nil, -- content window
+		head_win = nil, -- tab bar window (float mode)
+		body_win = nil, -- content window (float mode)
 		help_win = nil,
 		summary_win = nil,
 		last = nil, -- { resp, spec, opts } of the last shown response
@@ -26,6 +26,10 @@ local M = {
 		sidebar_entries = {}, -- entries currently listed (filtered)
 		sidebar_opts = nil,
 		marks = {}, -- buf -> { line -> extmark id } (inline result marks)
+		resp_split_win = nil, -- response split window (split mode)
+		resp_split_buf = nil, -- response split buffer (split mode)
+		resp_tab_win = nil, -- response tab bar split (split mode)
+		resp_tab_buf = nil, -- response tab bar buffer (split mode)
 	},
 }
 
@@ -65,16 +69,25 @@ local HELP_SECTIONS = {
 	},
 	{
 		"response",
-		"q close  1/2/3 or t tabs (body/headers/timeline)  p pretty/raw  y copy  c copy-curl  C copy-snippet  f save  z zoom  r resend  P json-path  V json-value  U copy-url  gx open URL  ? help",
+		"q close  1/2/3/4 or t tabs (body/headers/timeline/tests)  p pretty/raw  y copy  c copy-curl  C copy-snippet  f save  z zoom  r resend  D diff  J jq  o open-in-tab  ]k/[k json keys  P json-path  V json-value  U copy-url  gx open URL  ? help",
 	},
 	{
 		"buffer",
-		"<leader>is/<CR> send  <leader>iv vars  <leader>il sidebar  <leader>ia run all  <leader>ic cancel  <leader>ik help  ]r/[r next/prev  <leader>ih history  <leader>ie env  <leader>ir response  gx open URL  :TuiterCopyAs lang",
+		"<leader>is/<CR> send  <leader>iv vars  <leader>il sidebar  <leader>ia run all  <leader>ic cancel  <leader>ik help  <leader>ir response toggle  ]r/[r next/prev  <leader>ih history  <leader>ie env  gx open URL  :TuiterCopyAs lang",
 	},
 }
 
 local function is_valid(w)
 	return w and vim.api.nvim_win_is_valid(w)
+end
+
+local function layout_mode()
+	local ok, cfg = pcall(require, "tuiter")
+	if ok and cfg.opts then
+		local o = cfg.opts()
+		return (o.windows or {}).layout or "float"
+	end
+	return "float"
 end
 
 local function trunc(s, n)
@@ -180,12 +193,43 @@ end
 -- ---------------------------------------------------------------------------
 
 function M.close()
+	-- close float windows
 	for _, w in ipairs({ M.state.head_win, M.state.body_win }) do
 		if is_valid(w) then
 			pcall(vim.api.nvim_win_close, w, true)
 		end
 	end
 	M.state.head_win, M.state.body_win = nil, nil
+	-- close split windows
+	if is_valid(M.state.resp_tab_win) then
+		pcall(vim.api.nvim_win_close, M.state.resp_tab_win, true)
+	end
+	if is_valid(M.state.resp_split_win) then
+		pcall(vim.api.nvim_win_close, M.state.resp_split_win, true)
+	end
+	M.state.resp_tab_win, M.state.resp_tab_buf = nil, nil
+	M.state.resp_split_win, M.state.resp_split_buf = nil, nil
+end
+
+--- Close only the response (split or float), leaving the sidebar open.
+function M.close_response()
+	if is_valid(M.state.resp_split_win) then
+		pcall(vim.api.nvim_win_close, M.state.resp_split_win, true)
+		M.state.resp_split_win, M.state.resp_split_buf = nil, nil
+		return
+	end
+	M.close()
+end
+
+--- Toggle response visibility (split mode: toggle the response split).
+function M.toggle_response()
+	if is_valid(M.state.resp_split_win) then
+		M.close_response()
+	elseif M.state.last then
+		M.show(M.state.last.resp, M.state.last.spec, M.state.last.opts)
+	else
+		vim.notify("Tuiter: no response yet", vim.log.levels.INFO, { title = "Tuiter" })
+	end
 end
 
 local function float_col()
@@ -239,10 +283,13 @@ local function render_tabs()
 	end
 	local buf = vim.api.nvim_win_get_buf(M.state.head_win)
 	local width = vim.api.nvim_win_get_width(M.state.head_win)
-	local line = " "
+	-- colored method badge
+	local method = spec.method or ""
+	local method_badge = method ~= "" and ("[" .. method .. "] ") or ""
+	local line = " " .. method_badge
 	for i, name in ipairs(TAB_NAMES) do
 		if i > 1 then
-			line = line .. " | "
+			line = line .. " │ "
 		end
 		line = line .. name
 	end
@@ -251,7 +298,7 @@ local function render_tabs()
 	local status
 	if resp.status > 0 then
 		status = string.format(
-			"HTTP %d%s · %dms · %s",
+			"%d%s · %dms · %s",
 			resp.status,
 			reason ~= "" and (" " .. reason) or "",
 			(resp.time or 0) * 1000,
@@ -268,12 +315,22 @@ local function render_tabs()
 	vim.bo[buf].modifiable = true
 	vim.api.nvim_buf_set_lines(buf, 0, -1, false, { line })
 	vim.bo[buf].modifiable = false
-	local pos = 1 -- 0-based col where each tab starts
+	-- highlight method badge
+	if method ~= "" then
+		local badge = "[" .. method .. "]"
+		local mpos = line:find(badge, 1, true)
+		if mpos then
+			vim.api.nvim_buf_add_highlight(buf, -1, METHOD_HL[method] or "Comment", 0, mpos - 1, mpos - 1 + #badge)
+		end
+	end
+	-- highlight tab names
+	local pos = 1
 	for i, name in ipairs(TAB_NAMES) do
-		local seg = (i > 1 and " | " or " ") .. name
+		local seg = (i > 1 and " │ " or " ") .. name
 		vim.api.nvim_buf_add_highlight(buf, -1, i == M.state.tab and "TabLineSel" or "TabLine", 0, pos, pos + #seg)
 		pos = pos + #seg
 	end
+	-- highlight status
 	local stpos = line:find(status, 1, true)
 	if stpos then
 		vim.api.nvim_buf_add_highlight(buf, -1, ok and "TuiterOk" or "TuiterError", 0, stpos - 1, stpos - 1 + #status)
@@ -401,6 +458,186 @@ local function render_content()
 	vim.bo[buf].modifiable = false
 end
 
+-- Split-mode helpers: tab bar as first line in the same buffer as the body
+
+local function render_tab_line(resp, spec)
+	local reason = resp.headers:match("^HTTP/%S+ %d+ ([^\r\n]*)") or ""
+	local ok = resp.ok and resp.status < 400
+	-- colored method badge (e.g. [GET])
+	local method = (spec and spec.method) or ""
+	local method_badge = method ~= "" and ("[" .. method .. "] ") or ""
+	-- tab names with solid separators
+	local tab_part = ""
+	for i, name in ipairs(TAB_NAMES) do
+		if i > 1 then
+			tab_part = tab_part .. " │ "
+		end
+		tab_part = tab_part .. name
+	end
+	-- URL (truncated)
+	local url = spec and spec.url or ""
+	local url_part = url ~= "" and ("  " .. trunc(url, 40)) or ""
+	local status
+	if resp.status > 0 then
+		status = string.format(
+			"%d%s · %dms · %s",
+			resp.status,
+			reason ~= "" and (" " .. reason) or "",
+			(resp.time or 0) * 1000,
+			fmt_size(resp.size)
+		)
+	elseif resp.error and resp.error ~= "" then
+		status = "✗ " .. resp.error
+	else
+		status = "no response"
+	end
+	local line = " " .. method_badge .. tab_part .. url_part
+	local win = M.state.resp_split_win
+	local width = win and vim.api.nvim_win_get_width(win) or 80
+	if #line + #status + 3 < width then
+		line = line .. string.rep(" ", width - #line - #status) .. status
+	end
+	return line, ok, status, method
+end
+
+local function highlight_tab_line(buf, line, resp, method)
+	local ok = resp.ok and resp.status < 400
+	-- highlight method badge (e.g. [GET])
+	if method and method ~= "" then
+		local badge = "[" .. method .. "]"
+		local mpos = line:find(badge, 1, true)
+		if mpos then
+			vim.api.nvim_buf_add_highlight(buf, -1, METHOD_HL[method] or "Comment", 0, mpos - 1, mpos - 1 + #badge)
+		end
+	end
+	-- highlight tab names
+	local pos = 1
+	for i, name in ipairs(TAB_NAMES) do
+		local seg = (i > 1 and " │ " or " ") .. name
+		local hl = i == M.state.tab and "TabLineSel" or "TabLine"
+		vim.api.nvim_buf_add_highlight(buf, -1, hl, 0, pos, pos + #seg)
+		pos = pos + #seg
+	end
+	-- highlight status
+	local status = line:match("([^ ]%d%d%d[^ ]*)$") or line:match("(✗.*)$")
+	if status then
+		local stpos = line:find(status, 1, true)
+		if stpos then
+			vim.api.nvim_buf_add_highlight(buf, -1, ok and "TuiterOk" or "TuiterError", 0, stpos - 1, stpos - 1 + #status)
+		end
+	end
+end
+
+--- Render response content into the split buffer (below the tab bar line).
+local function render_split_content()
+	local buf = M.state.resp_split_buf
+	if not buf or not vim.api.nvim_buf_is_valid(buf) or not M.state.last then
+		return
+	end
+	local resp = M.state.last.resp
+	vim.bo[buf].modifiable = true
+	-- read existing tab line (line 1)
+	local tab_line = vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1] or ""
+	local new_tab_line, ok, status, method = render_tab_line(resp, M.state.last and M.state.last.spec)
+	if new_tab_line ~= tab_line then
+		vim.api.nvim_buf_set_lines(buf, 0, 1, false, { new_tab_line })
+		highlight_tab_line(buf, new_tab_line, resp, method)
+	end
+	-- build the content lines for the current tab
+	local content_lines = {}
+	if M.state.tab == 1 then
+		local d = M.state.display
+		local content = d.raw
+		if d.json and M.state.pretty and d.pretty then
+			content = d.pretty
+		end
+		if resp.error and resp.error ~= "" then
+			content = "✗ " .. resp.error
+		elseif content == "" then
+			content = "(empty body)"
+		end
+		content_lines = vim.split(content, "\n")
+		-- P3: truncate >200KB, show [show-all] toggle
+		local raw_size = #resp.body or 0
+		if raw_size > 200 * 1024 then
+			local max_lines = 2000
+			if #content_lines > max_lines then
+				local truncated = vim.list_extend({}, content_lines, 1, max_lines)
+				truncated[#truncated + 1] = ""
+				truncated[#truncated + 1] = string.format(
+					"[show-all] truncated %d lines (%.1fKB) — press gt to view raw",
+					#content_lines - max_lines,
+					raw_size / 1024
+				)
+				content_lines = truncated
+			end
+		end
+	elseif M.state.tab == 2 then
+		content_lines = resp.headers ~= "" and vim.split(resp.headers, "\n") or { "(no headers)" }
+	elseif M.state.tab == 3 then
+		content_lines = M.timeline_lines(resp)
+	else
+		-- Tests tab
+		local tests = resp.tests or {}
+		if #tests == 0 then
+			content_lines = { "(no # @test assertions)" }
+		else
+			for _, te in ipairs(tests) do
+				local icon = te.pass and "✓" or "✗"
+				local l = icon .. " " .. (te.expr or "")
+				if te.actual ~= nil then
+					l = l .. "   · got: " .. trunc(fmt_actual(te.actual), 60)
+				elseif te.error then
+					l = l .. "   · " .. te.error
+				end
+				content_lines[#content_lines + 1] = l
+			end
+		end
+	end
+	-- replace lines 3+ (line 1 = tab, line 2 = blank separator)
+	local new_lines = { new_tab_line, "" }
+	for _, l in ipairs(content_lines) do
+		new_lines[#new_lines + 1] = l
+	end
+	vim.api.nvim_buf_set_lines(buf, 0, -1, false, new_lines)
+	highlight_tab_line(buf, new_tab_line, resp, method)
+	-- filetype + treesitter for body tab
+	if M.state.tab == 1 then
+		local ft = M.state.display and M.state.display.json and "json" or body_filetype(resp)
+		if ft then
+			vim.bo[buf].filetype = ft
+			pcall(vim.treesitter.start, buf, ft)
+		end
+		if M.state.display and M.state.display.json then
+			vim.wo[M.state.resp_split_win].foldmethod = "expr"
+			vim.wo[M.state.resp_split_win].foldexpr = "v:lua.vim.treesitter.foldexpr()"
+			vim.wo[M.state.resp_split_win].foldlevel = 99
+		else
+			vim.wo[M.state.resp_split_win].foldmethod = "manual"
+		end
+	elseif M.state.tab == 2 then
+		vim.bo[buf].filetype = "text"
+		for i, hl in ipairs(content_lines) do
+			local key = hl:match("^([^:]+):")
+			if key then
+				vim.api.nvim_buf_add_highlight(buf, -1, "TuiterHeaderKey", i + 1, 0, #key)
+			end
+		end
+	elseif M.state.tab == 3 then
+		vim.bo[buf].filetype = "text"
+		for i, tl in ipairs(content_lines) do
+			vim.api.nvim_buf_add_highlight(buf, -1, "Comment", i + 1, 22, -1)
+		end
+	else
+		vim.bo[buf].filetype = "text"
+		local tests = resp.tests or {}
+		for i, te in ipairs(tests) do
+			vim.api.nvim_buf_add_highlight(buf, -1, te.pass and "TuiterOk" or "TuiterError", i + 1, 0, -1)
+		end
+	end
+	vim.bo[buf].modifiable = false
+end
+
 local function fmt_actual(v)
 	if type(v) == "table" then
 		v = vim.json.encode(v)
@@ -413,17 +650,41 @@ local function set_statusline(win, resp, spec)
 	local reason = resp.headers:match("^HTTP/%S+ %d+ ([^\r\n]*)") or ""
 	local ok = resp.ok and resp.status < 400
 	local hl = ok and "TuiterStatusOk" or "TuiterStatusErr"
-	local env = spec.env and ("   env: " .. spec.env) or ""
+	local env = spec.env and (" · env:" .. spec.env) or ""
+	local method_hl = METHOD_HL[spec.method] or "Comment"
+	-- encoding (e.g. gzip, br, identity)
+	local encoding = resp.headers:lower():match("content%-encoding:%s*(%S+)") or ""
+	local enc_part = encoding ~= "" and (" · " .. encoding) or ""
+	-- content-type short form
+	local ct = content_type(resp)
+	local ct_short = ct:match("([^/]+)$") or ct
+	local ct_part = ct ~= "" and (" · " .. ct_short) or ""
 	local status
 	if resp.status > 0 then
-		status =
-			string.format("HTTP %d %s · %dms · %s", resp.status, reason, (resp.time or 0) * 1000, fmt_size(resp.size))
+		status = string.format(
+			"%d%s",
+			resp.status,
+			reason ~= "" and (" " .. reason) or ""
+		)
 	elseif resp.error and resp.error ~= "" then
 		status = "✗ " .. resp.error
 	else
 		status = "no response"
 	end
-	vim.wo[win].statusline = string.format("%%#%s# tuiter  %s %s  ·  %s%s %%*", hl, spec.method, spec.url, status, env)
+	vim.wo[win].statusline = string.format(
+		"%%#%s# %s %%#%s#%s %%#%s# %s · %dms · %s%s%s%s %%*",
+		hl,
+		spec.method,
+		method_hl,
+		trunc(spec.url, 40),
+		hl,
+		status,
+		(resp.time or 0) * 1000,
+		fmt_size(resp.size),
+		enc_part,
+		ct_part,
+		env
+	)
 end
 
 --- Show a response. opts: { resend = fn, copy_curl = fn }
@@ -445,85 +706,171 @@ function M.show(resp, spec, opts)
 	M.state.pretty = json and pretty ~= nil
 	M.state.display = { raw = resp.body, pretty = pretty, json = json }
 
-	local tab_buf = mk_buf()
-	local body_buf = mk_buf()
-	local env = spec.env and ("(env: " .. spec.env .. ")") or ""
-	local head_win, body_win =
-		open_floats(tab_buf, body_buf, string.format("%s %s %s", spec.method, spec.url, env), opts.windows)
+	if layout_mode() == "split" then
+		-- split mode: botright vsplit for response, tab bar as first line
+		local body_buf = mk_buf()
+		vim.cmd("botright vsplit")
+		local body_win = vim.api.nvim_get_current_win()
+		vim.api.nvim_win_set_buf(body_win, body_buf)
+		vim.wo[body_win].wrap = true
+		vim.wo[body_win].number = true
+		vim.wo[body_win].winfixwidth = true
+		local resp_width = (opts.windows and opts.windows.width) or 120
+		pcall(vim.api.nvim_win_set_width, body_win, math.min(resp_width, vim.o.columns - 4))
+		-- tab bar as first line in the same buffer
+		vim.bo[body_buf].modifiable = true
+		local tab_line = render_tab_line(resp, spec)
+		vim.api.nvim_buf_set_lines(body_buf, 0, 0, false, { tab_line, "" })
+		highlight_tab_line(body_buf, tab_line, resp, spec.method)
+		vim.bo[body_buf].modifiable = false
+		set_statusline(body_win, resp, spec)
+		M.state.resp_split_win, M.state.resp_split_buf = body_win, body_buf
 
-	for _, b in ipairs({ tab_buf, body_buf }) do
-		buf_map(b, "q", M.close, "Close response")
-		buf_map(b, "t", M.cycle_tab, "Next tab")
-		buf_map(b, "1", function()
+		-- keymaps on the response split
+		buf_map(body_buf, "q", function()
+			M.close_response()
+		end, "Close response")
+		buf_map(body_buf, "t", M.cycle_tab, "Next tab")
+		buf_map(body_buf, "1", function()
 			M.set_tab(1)
 		end, "Body tab")
-		buf_map(b, "2", function()
+		buf_map(body_buf, "2", function()
 			M.set_tab(2)
 		end, "Headers tab")
-		buf_map(b, "3", function()
+		buf_map(body_buf, "3", function()
 			M.set_tab(3)
 		end, "Timeline tab")
-	end
-	buf_map(body_buf, "4", function()
-		M.set_tab(4)
-	end, "Tests tab")
-	buf_map(body_buf, "p", M.toggle_pretty, "Toggle pretty/raw body")
-	buf_map(body_buf, "y", M.yank_body, "Copy current tab")
-	buf_map(body_buf, "f", M.save_body, "Save body to file")
-	buf_map(body_buf, "z", M.toggle_zoom, "Zoom response")
-	buf_map(body_buf, "?", M.toggle_help, "Show keymap help")
-	buf_map(body_buf, "c", function()
-		if opts.copy_curl then
-			opts.copy_curl()
-		end
-	end, "Copy as curl")
-	buf_map(body_buf, "C", function()
-		if opts.copy_code then
-			opts.copy_code()
-		end
-	end, "Copy as code snippet")
-	buf_map(body_buf, "r", function()
-		if opts.resend then
-			opts.resend()
-		end
-	end, "Resend request")
-	buf_map(body_buf, "D", M.diff_prev, "Diff against previous response")
-	buf_map(body_buf, "J", M.jq_filter, "Filter body through jq")
-	buf_map(body_buf, "o", M.open_in_tab, "Open response in a new tab")
-	buf_map(body_buf, "]k", function()
-		M.jump_key(1)
-	end, "Next JSON key")
-	buf_map(body_buf, "[k", function()
-		M.jump_key(-1)
-	end, "Previous JSON key")
-	buf_map(body_buf, "P", M.copy_json_path, "Copy JSON path")
-	buf_map(body_buf, "V", M.copy_json_value, "Copy JSON value")
-	buf_map(body_buf, "U", M.copy_url, "Copy resolved URL")
-	buf_map(body_buf, "gx", function()
-		local last = M.state.last
-		if last then
-			vim.ui.open(client.resolve_url(last.spec))
-		end
-	end, "Open request URL in browser")
+		buf_map(body_buf, "4", function()
+			M.set_tab(4)
+		end, "Tests tab")
+		buf_map(body_buf, "p", M.toggle_pretty, "Toggle pretty/raw body")
+		buf_map(body_buf, "y", M.yank_body, "Copy current tab")
+		buf_map(body_buf, "f", M.save_body, "Save body to file")
+		buf_map(body_buf, "?", M.toggle_help, "Show keymap help")
+		buf_map(body_buf, "c", function()
+			if opts.copy_curl then
+				opts.copy_curl()
+			end
+		end, "Copy as curl")
+		buf_map(body_buf, "C", function()
+			if opts.copy_code then
+				opts.copy_code()
+			end
+		end, "Copy as code snippet")
+		buf_map(body_buf, "r", function()
+			if opts.resend then
+				opts.resend()
+			end
+		end, "Resend request")
+		buf_map(body_buf, "D", M.diff_prev, "Diff against previous response")
+		buf_map(body_buf, "J", M.jq_filter, "Filter body through jq")
+		buf_map(body_buf, "o", M.open_in_tab, "Open response in a new tab")
+		buf_map(body_buf, "]k", function()
+			M.jump_key(1)
+		end, "Next JSON key")
+		buf_map(body_buf, "[k", function()
+			M.jump_key(-1)
+		end, "Previous JSON key")
+		buf_map(body_buf, "P", M.copy_json_path, "Copy JSON path")
+		buf_map(body_buf, "V", M.copy_json_value, "Copy JSON value")
+		buf_map(body_buf, "U", M.copy_url, "Copy resolved URL")
+		buf_map(body_buf, "gx", function()
+			local last = M.state.last
+			if last then
+				vim.ui.open(client.resolve_url(last.spec))
+			end
+		end, "Open request URL in browser")
 
-	vim.wo[body_win].wrap = true
-	vim.wo[body_win].number = true -- Postman-style line numbers on the response
-	set_statusline(body_win, resp, spec)
-	M.state.head_win, M.state.body_win = head_win, body_win
-	render_tabs()
-	render_content()
+		render_split_content()
+	else
+		-- float mode (default)
+		local tab_buf = mk_buf()
+		local body_buf = mk_buf()
+		local env = spec.env and ("(env: " .. spec.env .. ")") or ""
+		local head_win, body_win =
+			open_floats(tab_buf, body_buf, string.format("%s %s %s", spec.method, spec.url, env), opts.windows)
+
+		for _, b in ipairs({ tab_buf, body_buf }) do
+			buf_map(b, "q", M.close, "Close response")
+			buf_map(b, "t", M.cycle_tab, "Next tab")
+			buf_map(b, "1", function()
+				M.set_tab(1)
+			end, "Body tab")
+			buf_map(b, "2", function()
+				M.set_tab(2)
+			end, "Headers tab")
+			buf_map(b, "3", function()
+				M.set_tab(3)
+			end, "Timeline tab")
+		end
+		buf_map(body_buf, "4", function()
+			M.set_tab(4)
+		end, "Tests tab")
+		buf_map(body_buf, "p", M.toggle_pretty, "Toggle pretty/raw body")
+		buf_map(body_buf, "y", M.yank_body, "Copy current tab")
+		buf_map(body_buf, "f", M.save_body, "Save body to file")
+		buf_map(body_buf, "z", M.toggle_zoom, "Zoom response")
+		buf_map(body_buf, "?", M.toggle_help, "Show keymap help")
+		buf_map(body_buf, "c", function()
+			if opts.copy_curl then
+				opts.copy_curl()
+			end
+		end, "Copy as curl")
+		buf_map(body_buf, "C", function()
+			if opts.copy_code then
+				opts.copy_code()
+			end
+		end, "Copy as code snippet")
+		buf_map(body_buf, "r", function()
+			if opts.resend then
+				opts.resend()
+			end
+		end, "Resend request")
+		buf_map(body_buf, "D", M.diff_prev, "Diff against previous response")
+		buf_map(body_buf, "J", M.jq_filter, "Filter body through jq")
+		buf_map(body_buf, "o", M.open_in_tab, "Open response in a new tab")
+		buf_map(body_buf, "]k", function()
+			M.jump_key(1)
+		end, "Next JSON key")
+		buf_map(body_buf, "[k", function()
+			M.jump_key(-1)
+		end, "Previous JSON key")
+		buf_map(body_buf, "P", M.copy_json_path, "Copy JSON path")
+		buf_map(body_buf, "V", M.copy_json_value, "Copy JSON value")
+		buf_map(body_buf, "U", M.copy_url, "Copy resolved URL")
+		buf_map(body_buf, "gx", function()
+			local last = M.state.last
+			if last then
+				vim.ui.open(client.resolve_url(last.spec))
+			end
+		end, "Open request URL in browser")
+
+		vim.wo[body_win].wrap = true
+		vim.wo[body_win].number = true -- Postman-style line numbers on the response
+		set_statusline(body_win, resp, spec)
+		M.state.head_win, M.state.body_win = head_win, body_win
+		render_tabs()
+		render_content()
+	end
 end
 
---- Switch the response tab (1=Body, 2=Headers, 3=Timeline).
+--- Switch the response tab (1=Body, 2=Headers, 3=Timeline, 4=Tests).
 function M.set_tab(n)
 	if not M.state.last then
 		return
 	end
 	M.state.tab = n
-	render_tabs()
-	render_content()
-	if is_valid(M.state.body_win) then
-		vim.api.nvim_set_current_win(M.state.body_win)
+	if is_valid(M.state.resp_split_win) then
+		-- split mode: tab bar is line 1, content starts at line 3
+		render_split_content()
+		pcall(vim.api.nvim_set_current_win, M.state.resp_split_win)
+	else
+		-- float mode
+		render_tabs()
+		render_content()
+		if is_valid(M.state.body_win) then
+			vim.api.nvim_set_current_win(M.state.body_win)
+		end
 	end
 end
 
@@ -539,7 +886,11 @@ function M.toggle_zoom()
 end
 
 function M.toggle_pretty()
-	if not M.state.display or not is_valid(M.state.body_win) then
+	local is_split = is_valid(M.state.resp_split_win)
+	if not is_split and not is_valid(M.state.body_win) then
+		return
+	end
+	if not M.state.display then
 		return
 	end
 	if not M.state.display.json then
@@ -550,15 +901,22 @@ function M.toggle_pretty()
 		M.set_tab(1)
 	end
 	M.state.pretty = not M.state.pretty
-	render_content()
+	if is_split then
+		render_split_content()
+	else
+		render_content()
+	end
 end
 
 function M.yank_body()
-	if not is_valid(M.state.body_win) then
+	local is_split = is_valid(M.state.resp_split_win)
+	if not is_split and not is_valid(M.state.body_win) then
 		return
 	end
-	local buf = vim.api.nvim_win_get_buf(M.state.body_win)
-	local text = table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n")
+	local buf = is_split and M.state.resp_split_buf or vim.api.nvim_win_get_buf(M.state.body_win)
+	local all_lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+	local start = is_split and 3 or 1 -- skip tab bar line in split mode
+	local text = table.concat(vim.list_extend({}, all_lines, start, #all_lines), "\n")
 	vim.fn.setreg('"', text)
 	vim.notify("Tuiter: " .. TAB_NAMES[M.state.tab]:lower() .. " copied", vim.log.levels.INFO, { title = "Tuiter" })
 end
@@ -645,11 +1003,14 @@ function M.copy_url()
 end
 
 function M.save_body()
-	if not is_valid(M.state.body_win) then
+	local is_split = is_valid(M.state.resp_split_win)
+	if not is_split and not is_valid(M.state.body_win) then
 		return
 	end
-	local buf = vim.api.nvim_win_get_buf(M.state.body_win)
-	local text = table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n")
+	local buf = is_split and M.state.resp_split_buf or vim.api.nvim_win_get_buf(M.state.body_win)
+	local all_lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+	local start = is_split and 3 or 1 -- skip tab bar in split mode
+	local text = table.concat(vim.list_extend({}, all_lines, start, #all_lines), "\n")
 	local default = "tuiter-body-" .. os.date("%Y%m%d-%H%M%S") .. ".json"
 	vim.ui.input({ prompt = "Save body to:", default = default }, function(path)
 		if not path or path == "" then
@@ -950,14 +1311,17 @@ end
 
 --- Jump to the next/previous top-level JSON key in the pretty body tab.
 function M.jump_key(dir)
-	local body_win = M.state.body_win
+	local is_split = is_valid(M.state.resp_split_win)
+	local body_win = is_split and M.state.resp_split_win or M.state.body_win
 	if not is_valid(body_win) or M.state.tab ~= 1 or not M.state.display or not M.state.display.json then
 		return
 	end
-	local buf = vim.api.nvim_win_get_buf(body_win)
+	local buf = is_split and M.state.resp_split_buf or vim.api.nvim_win_get_buf(body_win)
 	local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+	local content_start = is_split and 3 or 1 -- skip tab bar in split mode
 	local keys = {}
-	for i, line in ipairs(lines) do
+	for i = content_start, #lines do
+		local line = lines[i]
 		if line:match('^%s%s"') or line:match("^%s%s%d:") then
 			keys[#keys + 1] = i
 		end
@@ -1059,7 +1423,7 @@ function M.stream_end(code)
 end
 
 function M.toggle()
-	if is_valid(M.state.body_win) or is_valid(M.state.head_win) then
+	if is_valid(M.state.body_win) or is_valid(M.state.head_win) or is_valid(M.state.resp_split_win) then
 		M.close()
 	elseif M.state.last then
 		M.show(M.state.last.resp, M.state.last.spec, M.state.last.opts)
@@ -1177,38 +1541,72 @@ function M.show_sidebar(requests, opts)
 	local entries = sidebar_entries(requests)
 	M.state.sidebar_entries = entries
 
+	-- Nerd-Font icon detection: prefer Nerd glyphs when a Nerd Font is active
+	local has_nerd = vim.g.nerdfont == true
+			or (vim.o.guifont and vim.o.guifont:lower():find("nerd"))
+		or false
+	local icon_check = has_nerd and "" or "✓"
+	local icon_cross = has_nerd and "" or "✗"
+	local icon_star = has_nerd and "" or "★"
+	local icon_star_off = has_nerd and "" or "☆"
+
 	local buf = mk_buf()
 	local lines = {}
+	local fav_count = 0
+	local nonfav_count = 0
 	for _, r in ipairs(entries) do
+		if M.state.favs[r.url] then
+			fav_count = fav_count + 1
+		else
+			nonfav_count = nonfav_count + 1
+		end
+	end
+	local in_favs = true
+	for _, r in ipairs(entries) do
+		-- separator between favorites and non-favorites
+		if in_favs and not M.state.favs[r.url] and nonfav_count > 0 and fav_count > 0 then
+			lines[#lines + 1] = string.rep("─", 56)
+			vim.api.nvim_buf_add_highlight(buf, -1, "Comment", #lines - 1, 0, -1)
+			in_favs = false
+		end
 		local st = M.state.results[r.url]
 		local det = M.state.resp_detail[r.url]
 		local mark
 		if st then
 			if st > 0 then
-				mark = string.format("[%d · %dms]", st, math.floor((det and det.time or 0) * 1000))
+				mark = string.format("%s %d %dms", icon_check, st, math.floor((det and det.time or 0) * 1000))
 			elseif det and det.error and det.error ~= "" then
-				mark = "[✗ " .. trunc(det.error, 9) .. "]"
+				mark = icon_cross .. " " .. trunc(det.error, 9)
 			else
-				mark = "[✗]"
+				mark = icon_cross
 			end
 		else
-			mark = "    "
+			mark = "  "
 		end
-		local star = M.state.favs[r.url] and "★" or " "
+		local star = M.state.favs[r.url] and icon_star or " "
 		local label = r.name ~= "" and r.name or r.url
 		local url = r.name ~= "" and r.url or ""
-		lines[#lines + 1] = string.format("%s %s %-6s %-24s %s", star, mark, r.method, trunc(label, 24), trunc(url, 20))
+		lines[#lines + 1] = string.format("%s %-14s %-6s %-24s %s", star, mark, r.method, trunc(label, 24), trunc(url, 20))
 	end
 	vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+	-- highlight entries (track buf line separately from entry index due to separator)
+	local buf_line = 0
+	local sep_inserted = false
 	for i, r in ipairs(entries) do
-		local status = M.state.results[r.url]
+		-- skip separator line if present
+		if i > 1 and M.state.favs[entries[i - 1].url] and not M.state.favs[r.url] and fav_count > 0 and nonfav_count > 0 and not sep_inserted then
+			buf_line = buf_line + 1
+			sep_inserted = true
+		end
 		if M.state.favs[r.url] then
-			vim.api.nvim_buf_add_highlight(buf, -1, "TuiterStar", i - 1, 0, 1)
+			vim.api.nvim_buf_add_highlight(buf, -1, "TuiterStar", buf_line, 0, 1)
 		end
+		local status = M.state.results[r.url]
 		if status then
-			vim.api.nvim_buf_add_highlight(buf, -1, status < 400 and "TuiterOk" or "TuiterError", i - 1, 2, 6)
+			vim.api.nvim_buf_add_highlight(buf, -1, status < 400 and "TuiterOk" or "TuiterError", buf_line, 2, 16)
 		end
-		vim.api.nvim_buf_add_highlight(buf, -1, METHOD_HL[r.method] or "Comment", i - 1, 7, 7 + #r.method)
+		vim.api.nvim_buf_add_highlight(buf, -1, METHOD_HL[r.method] or "Comment", buf_line, 17, 17 + #r.method)
+		buf_line = buf_line + 1
 	end
 	vim.bo[buf].modifiable = false
 
@@ -1220,19 +1618,37 @@ function M.show_sidebar(requests, opts)
 		title = title .. "  filter: " .. M.state.filter
 	end
 	title = " requests (" .. #entries .. ")" .. title
-	local win = vim.api.nvim_open_win(buf, true, {
-		relative = "editor",
-		width = (opts.windows and opts.windows.sidebar_width) or 62,
-		height = math.min(#lines + 2, vim.o.lines - 4),
-		row = 2,
-		col = 2,
-		border = "rounded",
-		style = "minimal",
-		title = title .. " ",
-		title_pos = "center",
-	})
-	vim.wo[win].statusline =
-		"%#TuiterStatusHint# q=close  <CR>=run  g=go-to-file  *=favorite  /=filter  e=env  a=run-all  c=copy-curl  ?=help %*"
+
+	local win
+	if layout_mode() == "split" then
+		-- split mode: topleft vsplit with winfixwidth
+		local sw = (opts.windows and opts.windows.sidebar_width) or 62
+		vim.cmd("topleft " .. sw .. "vsplit")
+		win = vim.api.nvim_get_current_win()
+		vim.api.nvim_win_set_buf(win, buf)
+		vim.wo[win].winfixwidth = true
+		vim.wo[win].number = false
+		vim.wo[win].relativenumber = false
+		vim.wo[win].signcolumn = "no"
+		vim.wo[win].cursorline = true
+		-- window title via statusline (topleft splits don't support title)
+		vim.wo[win].statusline = "%#TuiterStatusHint# " .. title .. " %*"
+	else
+		-- float mode (default)
+		win = vim.api.nvim_open_win(buf, true, {
+			relative = "editor",
+			width = (opts.windows and opts.windows.sidebar_width) or 62,
+			height = math.min(#lines + 2, vim.o.lines - 4),
+			row = 2,
+			col = 2,
+			border = "rounded",
+			style = "minimal",
+			title = title .. " ",
+			title_pos = "center",
+		})
+		vim.wo[win].statusline =
+			"%#TuiterStatusHint# q=close  <CR>=run  g=go-to-file  *=favorite  /=filter  e=env  a=run-all  c=copy-curl  ?=help %*"
+	end
 
 	buf_map(buf, "q", M.close_sidebar, "Close request list")
 	buf_map(buf, "?", M.toggle_help, "Show keymap help")
