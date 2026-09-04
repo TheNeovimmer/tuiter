@@ -286,6 +286,60 @@ section h2 {
     margin-bottom: 1rem;
 }
 
+/* Telescope */
+.telescope-inner {
+    max-width: 1200px;
+    margin: 0 auto;
+}
+
+.telescope-sub {
+    text-align: center;
+    color: var(--color-text-secondary);
+    margin-bottom: 2rem;
+}
+
+.telescope-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 1.5rem;
+    margin-bottom: 3rem;
+}
+
+.telescope-item {
+    padding: 1.5rem;
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+}
+
+.telescope-item h3 {
+    font-size: 1.1rem;
+    font-weight: 600;
+    margin-bottom: 0.5rem;
+}
+
+.telescope-item p {
+    color: var(--color-text-secondary);
+    font-size: 0.95rem;
+}
+
+.telescope-inner h3 {
+    margin-bottom: 1rem;
+}
+
+.telescope-inner .keymaps-grid {
+    margin-bottom: 2rem;
+}
+
+.filter-syntax {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+}
+
+.filter-syntax code {
+    font-weight: 500;
+}
+
 /* Tags */
 .tags-content {
     max-width: 800px;

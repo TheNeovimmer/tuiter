@@ -2,9 +2,9 @@ tuiter
 =====
 
 API explorer for Neovim. Write requests in `.http` files, send them with
-one key, read the response in a floating window — with a request sidebar,
-collections runner, history, environments, dynamic variables, and JSON
-pretty-printing. Pure Lua, zero deps, Neovim-native.
+one key, read the response in a floating window — with a Telescope-powered
+request browser, collections runner, history, environments, dynamic variables,
+and JSON pretty-printing. Pure Lua, zero deps, Neovim-native.
 
 📖 **[Documentation](https://theneovimmer.github.io/tuiter)** · 
 📦 **[Install](#installation-lazyvim--lazynvim)** · 
@@ -16,10 +16,11 @@ pretty-printing. Pure Lua, zero deps, Neovim-native.
 - **Syntax highlighting** — methods color-coded (GET green, POST blue, PUT/PATCH yellow, DELETE red), blue URLs, section titles, `@var`s, JSON bodies, `{{variables}}` — via `syntax/http.vim`
 - **Loading spinner** — animated braille spinner shows `⠋ GET https://api…` while a request is in flight
 - **Inline result marks** — every send stamps `✓ 200 · 45ms` / `✗ 404` as virtual text on the request line, so the file itself shows what passed and what didn't
-- **Request sidebar** — list of every request; run, jump, favorite (`*`), filter (`/`), switch env (`e`), copy-as-curl; favorites separated from the rest with a divider
-- **Collections** — organize requests in `*.http.collections/` directories; create, add files, list collections with `:TuiterCollection`
-- **Templates** — save and reuse request patterns; 10 built-in templates (GET, POST, PUT, DELETE, auth, pagination, GraphQL, etc.); `:TuiterSnippet` to list/save/insert
-- **Request tags** — `# @tag auth,breaking,slow` for filtering; use `tag:auth` in sidebar filter
+- **Telescope-powered UI** — all browsing via Telescope pickers with fuzzy finding, multi-select, and smart sorting (frequency/recency)
+- **Request picker** — `:Telescope tuiter requests` or `<leader>il` — browse requests with favorites, tags, last used time; actions: send, go to file, copy curl, copy code
+- **Collections** — organize requests in `*.http.collections/` directories; browse with `:Telescope tuiter collections`
+- **Templates** — save and reuse request patterns; 10 built-in templates; browse with `:Telescope tuiter templates`
+- **Request tags** — `# @tag auth,breaking,slow` for filtering; use `tag:auth` in picker prompt
 - **Collection env files** — `collection.env.json` in collection directories overrides root env files
 - **Collection runner** — `<leader>ia` runs every request in the file and shows a ✓/✗ summary; `# @skip` requests are excluded (handy for destructive endpoints)
 - **Health check** — `:checkhealth tuiter` verifies Neovim, curl and the data/cookie dirs
@@ -47,7 +48,9 @@ pretty-printing. Pure Lua, zero deps, Neovim-native.
   every send / run-all (paths support `{{vars}}`)
 - **Requester tooling** — `:TuiterWatch` healthcheck, `:TuiterCI` headless run-all with exit code + JUnit, `:TuiterJUnit`, `:TuiterFormat`, `:TuiterScaffold`
 - **Response tooling** — diff against previous (`D`), jq filter (`J`), open in a tab (`o`), JSON key navigation (`]k`/`[k`), search (`/`), expand truncated bodies (`A`), and a Tests tab (`4`)
-- **Picker integration** — Telescope extension (`history` / `requests` / `env`) plus `vim.ui.select` (LazyVim → snacks picker)
+- **Picker integration** — Telescope extension with 6 pickers: `requests`, `history`, `env`, `collections`, `templates`, `commands`
+- **Multi-select** — select multiple requests in picker, run all selected
+- **Smart sorting** — frequency-based and recency-based sorting across all pickers
 - **Per-request curl directives** — `# @cert`, `# @key`, `# @proxy`, `# @insecure`
 - **Secret redaction** — Authorization / Cookie / API-key header values are never written to history
 - **GraphQL files** — `.graphql`/`.gql` buffers: each operation becomes a POST with `{"query", "variables"}` from `# @url` / `# @variables`
@@ -175,14 +178,17 @@ Scripts run in a sandboxed `load()` — no filesystem or network access.
 | Key | Action |
 |---|---|
 | `<leader>is` / `<CR>` | Send request under cursor |
-| `<leader>il` | Request sidebar |
+| `<leader>il` | Request picker (Telescope) |
 | `<leader>ia` | Run all requests in the file, show summary |
 | `<leader>ic` | Cancel in-flight requests |
 | `<leader>ik` | Keymap help float |
-| `<leader>ih` | Request history (pick & re-run) |
-| `<leader>ie` | Select environment |
+| `<leader>ih` | Request history (Telescope) |
+| `<leader>ie` | Select environment (Telescope) |
 | `<leader>iv` | Show resolved values of every `{{var}}` in the request (vars inspector) |
 | `<leader>ir` | Toggle response window |
+| `<leader>iq` | Command picker (Telescope) |
+| `<leader>it` | Template picker (Telescope) |
+| `<leader>ib` | Collection picker (Telescope) |
 | `]r` / `[r` | Next / previous request |
 | `gx` | Open the request URL in your browser (`vim.ui.open`, vars resolved) |
 
@@ -191,6 +197,48 @@ skip one (or all), set it to `false` / pass `keymaps = false`.
 
 In insert mode, `<C-x><C-o>` completes `{{var}}` placeholders (request vars,
 env vars, dynamic values).
+
+### Telescope pickers
+
+All browsing via Telescope with fuzzy finding, multi-select, and smart sorting:
+
+| Picker | Command | Keymap |
+|---|---|---|
+| Requests | `:Telescope tuiter requests` | `<leader>il` |
+| History | `:Telescope tuiter history` | `<leader>ih` |
+| Environments | `:Telescope tuiter env` | `<leader>ie` |
+| Collections | `:Telescope tuiter collections` | `<leader>ib` |
+| Templates | `:Telescope tuiter templates` | `<leader>it` |
+| Commands | `:Telescope tuiter commands` | `<leader>iq` |
+
+**Request picker actions:**
+- `<CR>` — send request
+- `<C-o>` — go to request in file
+- `<C-f>` — toggle favorite
+- `<C-s>` — copy as curl
+- `<C-c>` — copy as code snippet
+- `<Tab>` / `<S-Tab>` — multi-select
+- `<C-a>` — run all selected
+
+**History picker actions:**
+- `<CR>` — replay request
+- `<C-d>` — delete from history
+- `<C-s>` — copy as curl
+
+**Collection picker actions:**
+- `<CR>` — open collection (shows requests)
+- `<C-n>` — new collection
+- `<C-d>` — delete collection
+
+**Template picker actions:**
+- `<CR>` — insert template at cursor
+- `<C-s>` — save current request as template
+- `<C-d>` — delete template
+
+**Filter syntax in prompt:**
+- `method:GET` — filter by method
+- `tag:auth` — filter by tag
+- `fav:true` — filter favorites only
 
 ### Request sidebar (`<leader>il` / `:Tuiter`)
 
@@ -692,7 +740,8 @@ lua/tuiter/import.lua    Postman + OpenAPI -> .http conversion (pure functions)
 lua/tuiter/ui.lua        response windows + request sidebar + run summary + streaming
                          + loading spinner + method-colored badges + split mode
 lua/tuiter/history.lua   persisted request history (secrets redacted)
-lua/tuiter/pickers.lua   Telescope picker providers
+lua/tuiter/pickers.lua   Telescope pickers (requests, history, env, collections, templates, commands)
+                         + smart sorting (frequency/recency), multi-select, favorites
 lua/tuiter/collections.lua  collection management (create, add, list)
 lua/tuiter/templates.lua    request template management (built-in + saved)
 lua/telescope/_extensions/tuiter.lua  Telescope extension registration
@@ -703,7 +752,7 @@ syntax/http.vim          .http syntax highlighting (methods, URLs, headers, JSON
 
 ```lua
 require("telescope").load_extension("tuiter")
--- :Telescope tuiter history | requests | env
+-- :Telescope tuiter requests | history | env | collections | templates | commands
 ```
 
 ## Notes

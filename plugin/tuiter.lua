@@ -151,3 +151,35 @@ end, {
 	end,
 	desc = "Manage request templates (list/save/insert)",
 })
+
+-- Telescope-specific commands
+vim.api.nvim_create_user_command("TelescopeTuiter", function(a)
+	local parts = vim.split(a.args, "%s+")
+	local picker = parts[1] or "requests"
+	local ok, pickers = pcall(require, "tuiter.pickers")
+	if not ok then
+		vim.notify("Tuiter: telescope.nvim not available", vim.log.levels.ERROR, { title = "Tuiter" })
+		return
+	end
+	if picker == "requests" then
+		pickers.requests()
+	elseif picker == "history" then
+		pickers.history()
+	elseif picker == "env" then
+		pickers.env()
+	elseif picker == "collections" then
+		pickers.collections()
+	elseif picker == "templates" then
+		pickers.templates()
+	elseif picker == "commands" then
+		pickers.commands()
+	else
+		pickers.requests()
+	end
+end, {
+	nargs = "*",
+	complete = function()
+		return { "requests", "history", "env", "collections", "templates", "commands" }
+	end,
+	desc = "Open tuiter Telescope picker",
+})

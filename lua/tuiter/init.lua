@@ -235,16 +235,21 @@ function M.jump_request(dir)
 end
 
 --- Open (or close) the request sidebar for the current .http buffer.
---- The sidebar stays open while running (Insomnia-style); response floats
---- open to its right.
+--- Uses Telescope when available, falls back to floating sidebar.
 function M.sidebar()
+	-- Try Telescope first
+	local ok, pickers = pcall(require, "tuiter.pickers")
+	if ok then
+		pickers.requests()
+		return
+	end
+	-- Fallback to floating sidebar
 	if ui.sidebar_is_open() then
 		ui.close_sidebar()
 		return
 	end
 	local buf = vim.api.nvim_get_current_buf()
 	if vim.bo[buf].buftype ~= "" then
-		-- inside a scratch/response buffer: reuse the last http buffer
 		buf = (M.source_buf and vim.api.nvim_buf_is_valid(M.source_buf) and M.source_buf) or 0
 	end
 	local requests = parse_buffer(buf)
@@ -283,7 +288,15 @@ function M.sidebar()
 end
 
 --- Pick a past request from history and re-run it.
+--- Uses Telescope when available, falls back to vim.ui.select.
 function M.history()
+	-- Try Telescope first
+	local ok, pickers = pcall(require, "tuiter.pickers")
+	if ok then
+		pickers.history()
+		return
+	end
+	-- Fallback
 	history.pick(function(spec)
 		M.resend(spec)
 	end)
@@ -324,6 +337,13 @@ function M.select_env(opts, on_select)
 		)
 		return
 	end
+	-- Try Telescope first
+	local ok, pickers = pcall(require, "tuiter.pickers")
+	if ok then
+		pickers.env()
+		return
+	end
+	-- Fallback
 	vim.ui.select(envs, { prompt = "Tuiter environment" }, function(name)
 		if name then
 			client.set_env(name, cwd, config)
@@ -404,13 +424,13 @@ function M.setup_keymaps(buf)
 		map(km.run, function()
 			M.run({ buf = buf })
 		end, "Send request under cursor")
-		-- Insomnia / VS Code REST Client muscle memory: Enter sends
+		-- Enter sends (muscle memory)
 		map("<CR>", function()
 			M.run({ buf = buf })
 		end, "Send request under cursor")
 	end
 	if km.list then
-		map(km.list, M.sidebar, "Request sidebar")
+		map(km.list, M.sidebar, "Request picker (Telescope)")
 	end
 	if km.run_all then
 		map(km.run_all, function()
@@ -426,12 +446,12 @@ function M.setup_keymaps(buf)
 		end, "Show keymap help")
 	end
 	if km.history then
-		map(km.history, M.history, "Request history")
+		map(km.history, M.history, "Request history (Telescope)")
 	end
 	if km.env then
 		map(km.env, function()
 			M.select_env({ cwd = dir })
-		end, "Select environment")
+		end, "Select environment (Telescope)")
 	end
 	if km.response then
 		map(km.response, M.toggle_response, "Toggle response")
@@ -455,6 +475,20 @@ function M.setup_keymaps(buf)
 			end
 		end, "Open request URL in browser")
 	end
+	-- Telescope-specific keymaps
+	local function telescope_map(lhs, picker, desc)
+		map(lhs, function()
+			local ok, pickers = pcall(require, "tuiter.pickers")
+			if ok then
+				pickers[picker]()
+			else
+				vim.notify("Tuiter: telescope.nvim not available", vim.log.levels.WARN, { title = "Tuiter" })
+			end
+		end, desc)
+	end
+	telescope_map("<leader>iq", "commands", "Command picker (Telescope)")
+	telescope_map("<leader>it", "templates", "Template picker (Telescope)")
+	telescope_map("<leader>ib", "collections", "Collection picker (Telescope)")
 end
 
 -- ---------------------------------------------------------------------------

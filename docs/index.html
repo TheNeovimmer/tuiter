@@ -17,6 +17,7 @@
                 <a href="#features">Features</a>
                 <a href="#installation">Install</a>
                 <a href="#usage">Usage</a>
+                <a href="#telescope">Telescope</a>
                 <a href="#commands">Commands</a>
                 <a href="https://github.com/TheNeovimmer/tuiter">GitHub</a>
             </div>
@@ -26,7 +27,7 @@
     <header class="hero">
         <div class="hero-inner">
             <h1>API explorer for <span class="highlight">Neovim</span></h1>
-            <p class="hero-sub">Write requests in <code>.http</code> files, send them with one key, read the response in a floating window — with a request sidebar, collections runner, history, environments, dynamic variables, and JSON pretty-printing. Pure Lua, zero deps, Neovim-native.</p>
+            <p class="hero-sub">Write requests in <code>.http</code> files, send them with one key, read the response in a floating window — with a Telescope-powered request browser, collections runner, history, environments, dynamic variables, and JSON pretty-printing. Pure Lua, zero deps, Neovim-native.</p>
             <div class="hero-actions">
                 <a href="#installation" class="btn btn-primary">Get started</a>
                 <a href="https://github.com/TheNeovimmer/tuiter" class="btn btn-secondary">View on GitHub</a>
@@ -59,24 +60,39 @@
                     <p>Every send stamps <code>✓ 200 · 45ms</code> / <code>✗ 404</code> as virtual text on the request line</p>
                 </div>
                 <div class="feature-card">
+                    <div class="feature-icon">🔭</div>
+                    <h3>Telescope-powered UI</h3>
+                    <p>All browsing via Telescope pickers with fuzzy finding, multi-select, and smart sorting (frequency/recency)</p>
+                </div>
+                <div class="feature-card">
                     <div class="feature-icon">📋</div>
-                    <h3>Request sidebar</h3>
-                    <p>List of every request; run, jump, favorite, filter, switch env, copy-as-curl; favorites separated with a divider</p>
+                    <h3>Request picker</h3>
+                    <p>Browse requests with favorites, tags, last used time; actions: send, go to file, copy curl, copy code</p>
                 </div>
                 <div class="feature-card">
                     <div class="feature-icon">📦</div>
                     <h3>Collections</h3>
-                    <p>Organize requests in <code>*.http.collections/</code> directories; create, add files, list collections</p>
+                    <p>Organize requests in <code>*.http.collections/</code> directories; browse with Telescope picker</p>
                 </div>
                 <div class="feature-card">
                     <div class="feature-icon">📝</div>
                     <h3>Templates</h3>
-                    <p>Save and reuse request patterns; 10 built-in templates (GET, POST, PUT, DELETE, auth, pagination, GraphQL, etc.)</p>
+                    <p>Save and reuse request patterns; 10 built-in templates; browse with Telescope picker</p>
                 </div>
                 <div class="feature-card">
                     <div class="feature-icon">🏷️</div>
                     <h3>Request tags</h3>
-                    <p><code># @tag auth,breaking,slow</code> for filtering; use <code>tag:auth</code> in sidebar filter</p>
+                    <p><code># @tag auth,breaking,slow</code> for filtering; use <code>tag:auth</code> in picker prompt</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">⏩</div>
+                    <h3>Multi-select</h3>
+                    <p>Select multiple requests in picker with <code>&lt;Tab&gt;</code>, run all selected with <code>&lt;C-a&gt;</code></p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">🔢</div>
+                    <h3>Smart sorting</h3>
+                    <p>Frequency-based and recency-based sorting across all pickers</p>
                 </div>
                 <div class="feature-card">
                     <div class="feature-icon">🔄</div>
@@ -292,7 +308,7 @@ Content-Type: application/json
                 </div>
                 <div class="keymap-item">
                     <code>&lt;leader&gt;il</code>
-                    <span>Request sidebar</span>
+                    <span>Request picker (Telescope)</span>
                 </div>
                 <div class="keymap-item">
                     <code>&lt;leader&gt;ia</code>
@@ -308,11 +324,11 @@ Content-Type: application/json
                 </div>
                 <div class="keymap-item">
                     <code>&lt;leader&gt;ih</code>
-                    <span>Request history</span>
+                    <span>Request history (Telescope)</span>
                 </div>
                 <div class="keymap-item">
                     <code>&lt;leader&gt;ie</code>
-                    <span>Select environment</span>
+                    <span>Select environment (Telescope)</span>
                 </div>
                 <div class="keymap-item">
                     <code>&lt;leader&gt;iv</code>
@@ -323,6 +339,18 @@ Content-Type: application/json
                     <span>Toggle response window</span>
                 </div>
                 <div class="keymap-item">
+                    <code>&lt;leader&gt;iq</code>
+                    <span>Command picker (Telescope)</span>
+                </div>
+                <div class="keymap-item">
+                    <code>&lt;leader&gt;it</code>
+                    <span>Template picker (Telescope)</span>
+                </div>
+                <div class="keymap-item">
+                    <code>&lt;leader&gt;ib</code>
+                    <span>Collection picker (Telescope)</span>
+                </div>
+                <div class="keymap-item">
                     <code>]r</code> / <code>[r</code>
                     <span>Next / previous request</span>
                 </div>
@@ -330,6 +358,76 @@ Content-Type: application/json
                     <code>gx</code>
                     <span>Open request URL in browser</span>
                 </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="telescope" id="telescope">
+        <div class="telescope-inner">
+            <h2>Telescope Pickers</h2>
+            <p class="telescope-sub">All browsing via Telescope with fuzzy finding, multi-select, and smart sorting.</p>
+            <div class="telescope-grid">
+                <div class="telescope-item">
+                    <h3>Requests</h3>
+                    <p><code>:Telescope tuiter requests</code> — browse requests in buffer, send, go to file, favorite, copy curl/code</p>
+                </div>
+                <div class="telescope-item">
+                    <h3>History</h3>
+                    <p><code>:Telescope tuiter history</code> — replay past requests, delete, copy curl</p>
+                </div>
+                <div class="telescope-item">
+                    <h3>Environments</h3>
+                    <p><code>:Telescope tuiter env</code> — switch between environments</p>
+                </div>
+                <div class="telescope-item">
+                    <h3>Collections</h3>
+                    <p><code>:Telescope tuiter collections</code> — browse collections, open requests inside, create/delete</p>
+                </div>
+                <div class="telescope-item">
+                    <h3>Templates</h3>
+                    <p><code>:Telescope tuiter templates</code> — insert built-in or saved templates, save current request</p>
+                </div>
+                <div class="telescope-item">
+                    <h3>Commands</h3>
+                    <p><code>:Telescope tuiter commands</code> — quick access to every tuiter command</p>
+                </div>
+            </div>
+            <h3>Request picker actions</h3>
+            <div class="keymaps-grid">
+                <div class="keymap-item">
+                    <code>&lt;CR&gt;</code>
+                    <span>Send request</span>
+                </div>
+                <div class="keymap-item">
+                    <code>&lt;C-o&gt;</code>
+                    <span>Go to request in file</span>
+                </div>
+                <div class="keymap-item">
+                    <code>&lt;C-f&gt;</code>
+                    <span>Toggle favorite</span>
+                </div>
+                <div class="keymap-item">
+                    <code>&lt;C-s&gt;</code>
+                    <span>Copy as curl</span>
+                </div>
+                <div class="keymap-item">
+                    <code>&lt;C-c&gt;</code>
+                    <span>Copy as code snippet</span>
+                </div>
+                <div class="keymap-item">
+                    <code>&lt;Tab&gt;</code> / <code>&lt;S-Tab&gt;</code>
+                    <span>Multi-select</span>
+                </div>
+                <div class="keymap-item">
+                    <code>&lt;C-a&gt;</code>
+                    <span>Run all selected</span>
+                </div>
+            </div>
+            <h3>Filter syntax</h3>
+            <div class="filter-syntax">
+                <p><code>method:GET</code> — filter by method</p>
+                <p><code>tag:auth</code> — filter by tag</p>
+                <p><code>fav:true</code> — filter favorites only</p>
             </div>
         </div>
     </section>
