@@ -64,7 +64,7 @@ REST Client style, many requests per file:
 
 - `### Name` starts a new request (optional name); a bare `METHOD URL` line
   also starts one without a name
-- First line: `METHOD URL` — GET is implied when the method is omitted
+- First line: `METHOD URL` (the method is required, e.g. `GET https://…`)
 - `Header: value` lines until the first blank line
 - After the blank line, everything until the next `###` is the body
 - `#` lines are comments; `# @name foo` names the request
@@ -242,6 +242,7 @@ relative to the request file's directory; failed requests are not exported:>
 10. COMMANDS                                          *tuiter-commands*
 
   :Tuiter                Toggle request sidebar
+  :TuiterSidebar         Toggle the floating request sidebar (always available)
   :TuiterRun [lnum]      Send request under cursor
   :TuiterRunAll          Run all requests, show summary
   :TuiterCancel          Cancel in-flight requests
