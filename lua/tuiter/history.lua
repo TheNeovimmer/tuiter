@@ -3,6 +3,10 @@ local M = {}
 
 local MAX = 200
 
+-- Bodies bigger than this are not worth persisting per send: the full body
+-- stays in the response window, history keeps a marker instead.
+local MAX_BODY_BYTES = 16 * 1024
+
 -- Secrets never written to history (screenshots happen): the header VALUE is
 -- dropped entirely so a leaked history.json doesn't leak credentials.
 local REDACT_HEADERS = {
@@ -35,13 +39,39 @@ function M.load()
 	end
 	local ok, data = pcall(vim.json.decode, table.concat(vim.fn.readfile(f), "\n"))
 	if not ok or type(data) ~= "table" then
+		-- never silently wipe history: quarantine the corrupt file so the
+		-- next add() doesn't overwrite it, and tell the user once
+		pcall(vim.fn.writefile, vim.fn.readfile(f), f .. ".corrupt.bak")
+		vim.notify(
+			"Tuiter: history file was corrupt — moved to history.json.corrupt.bak, starting fresh",
+			vim.log.levels.WARN,
+			{ title = "Tuiter" }
+		)
 		return {}
 	end
 	return data
 end
 
+--- Same request identity for dedupe: method + url + body + the headers,
+--- vars and env that actually change what is sent.
+local function same_request(a, b)
+	if a.method ~= b.method or a.url ~= b.url then
+		return false
+	end
+	if (a.spec.body or "") ~= (b.spec.body or "") then
+		return false
+	end
+	return vim.inspect(a.spec.headers) == vim.inspect(b.spec.headers)
+		and vim.inspect(a.spec.vars) == vim.inspect(b.spec.vars)
+		and (a.spec.env or "") == (b.spec.env or "")
+end
+
 function M.add(spec, resp)
 	local h = M.load()
+	local body = spec.body
+	if type(body) == "string" and #body > MAX_BODY_BYTES then
+		body = "[body omitted from history: " .. #body .. " bytes]"
+	end
 	local entry = {
 		ts = os.time(),
 		method = spec.method,
@@ -54,17 +84,18 @@ function M.add(spec, resp)
 			method = spec.method,
 			url = spec.url,
 			headers = redact_spec(spec),
-			body = spec.body,
+			body = body,
 			vars = spec.vars,
 			name = spec.name or "",
 			cwd = spec.cwd,
+			env = spec.env,
 			opts = spec.opts, -- keep # @base / # @save / # @timeout etc. on replay
 		},
 	}
 	-- dedupe consecutive identical requests: refresh the head entry instead
 	-- of piling up (e.g. repeated <leader>is on the same request)
 	local head = h[1]
-	if head and head.method == entry.method and head.url == entry.url and (head.spec.body or "") == (spec.body or "") then
+	if head and same_request(head, entry) then
 		head.ts, head.status, head.time, head.size = entry.ts, entry.status, entry.time, entry.size
 	else
 		table.insert(h, 1, entry)

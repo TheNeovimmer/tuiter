@@ -139,6 +139,12 @@ local function buf_map(buf, lhs, rhs, desc)
 	vim.keymap.set("n", lhs, rhs, { buffer = buf, nowait = true, desc = "Tuiter: " .. desc })
 end
 
+--- Standard dismiss: every tuiter float closes with `q` or `<Esc>`.
+local function dismiss(buf, close_fn, desc)
+	buf_map(buf, "q", close_fn, desc)
+	buf_map(buf, "<Esc>", close_fn, desc)
+end
+
 -- ---------------------------------------------------------------------------
 -- Loading spinner
 -- ---------------------------------------------------------------------------
@@ -204,7 +210,7 @@ local HELP_SECTIONS = {
 	},
 	{
 		"response",
-		"q close  1/2/3/4 or t tabs (body/headers/timeline/tests)  p pretty/raw  y copy  c copy-curl  C copy-snippet  f save  z zoom  r resend  D diff  J jq  o open-in-tab  ]k/[k json keys  P json-path  V json-value  U copy-url  gx open URL  ? help",
+		"q/Esc close  1/2/3/4 or t tabs (body/headers/timeline/tests)  p pretty/raw  y copy  / search  A show-all  c copy-curl  C copy-snippet  f save  z zoom  r resend  D diff  J jq  o open-in-tab  ]k/[k json keys  P json-path  V json-value  U copy-url  gx open URL  ? help",
 	},
 	{
 		"buffer",
@@ -296,7 +302,7 @@ end
 --- Wire all standard response keymaps onto a buffer.
 local function setup_response_keymaps(buf, opts, close_fn)
 	close_fn = close_fn or M.close
-	buf_map(buf, "q", close_fn, "Close response")
+	dismiss(buf, close_fn, "Close response")
 	buf_map(buf, "t", M.cycle_tab, "Next tab")
 	buf_map(buf, "1", function() M.set_tab(1) end, "Body tab")
 	buf_map(buf, "2", function() M.set_tab(2) end, "Headers tab")
@@ -417,12 +423,13 @@ end
 
 function M.close()
 	M.close_spinner()
-	-- close float windows
-	for _, w in ipairs({ M.state.head_win, M.state.body_win }) do
+	-- close float windows (response pair plus any orphaned help/aux float)
+	for _, w in ipairs({ M.state.head_win, M.state.body_win, M.state.help_win, M.state.aux_win }) do
 		if is_valid(w) then
 			pcall(vim.api.nvim_win_close, w, true)
 		end
 	end
+	M.state.help_win, M.state.aux_win = nil, nil
 	M.state.head_win, M.state.body_win = nil, nil
 	-- close split windows
 	if is_valid(M.state.resp_tab_win) then
@@ -804,7 +811,12 @@ end
 function M.show(resp, spec, opts)
 	opts = opts or {}
 	M.close_spinner() -- dismiss loading spinner
-	M.state.prev = M.state.last -- save for diff-vs-previous
+	if not opts.keep_view then
+		-- fresh response: reset the view (zoom re-shows with keep_view)
+		M.state.prev = M.state.last -- save for diff-vs-previous
+		M.state.tab = 1
+		M.state.show_all = false
+	end
 	M.state.last = { resp = resp, spec = spec, opts = opts }
 	if opts.buf then
 		spec.buf = spec.buf or opts.buf
@@ -817,7 +829,9 @@ function M.show(resp, spec, opts)
 
 	local json = is_json(resp)
 	local pretty = json and client.pretty_json(resp.body) or nil
-	M.state.pretty = json and pretty ~= nil
+	if not opts.keep_view then
+		M.state.pretty = json and pretty ~= nil
+	end
 	M.state.display = { raw = resp.body, pretty = pretty, json = json }
 
 	if layout_mode() == "split" then
@@ -852,11 +866,12 @@ function M.show(resp, spec, opts)
 
 		setup_response_keymaps(body_buf, opts, M.close)
 		for _, b in ipairs({ tab_buf, body_buf }) do
-			buf_map(b, "q", M.close, "Close response")
+			dismiss(b, M.close, "Close response")
 			buf_map(b, "t", M.cycle_tab, "Next tab")
 			buf_map(b, "1", function() M.set_tab(1) end, "Body tab")
 			buf_map(b, "2", function() M.set_tab(2) end, "Headers tab")
 			buf_map(b, "3", function() M.set_tab(3) end, "Timeline tab")
+			buf_map(b, "4", function() M.set_tab(4) end, "Tests tab")
 		end
 
 		vim.wo[body_win].wrap = true
@@ -895,7 +910,10 @@ end
 function M.toggle_zoom()
 	M.state.zoomed = not M.state.zoomed
 	if M.state.last then
-		M.show(M.state.last.resp, M.state.last.spec, M.state.last.opts)
+		-- keep_view: zoom must not reset pretty/tab/show_all or clobber
+		-- the diff baseline (state.prev)
+		local nopts = vim.tbl_extend("force", M.state.last.opts or {}, { keep_view = true })
+		M.show(M.state.last.resp, M.state.last.spec, nopts)
 	end
 end
 
@@ -1124,7 +1142,7 @@ local function open_aux(title, lines, hl_line)
 		title = " " .. title .. " ",
 		title_pos = "center",
 	})
-	buf_map(buf, "q", close_aux, "Close")
+	dismiss(buf, close_aux, "Close")
 	for i, line in ipairs(lines) do
 		if hl_line then
 			local hl = hl_line(line)
@@ -1381,7 +1399,7 @@ function M.open_stream(spec)
 		title = " streaming — " .. trunc(spec.url, 30) .. " ",
 		title_pos = "center",
 	})
-	buf_map(buf, "q", function()
+	dismiss(buf, function()
 		pcall(vim.api.nvim_win_close, win, true)
 		stream_win = nil
 	end, "Close stream")
@@ -1477,7 +1495,7 @@ function M.toggle_help()
 		title = " tuiter help ",
 		title_pos = "center",
 	})
-	buf_map(buf, "q", M.toggle_help, "Close help")
+	dismiss(buf, M.toggle_help, "Close help")
 	buf_map(buf, "?", M.toggle_help, "Close help")
 	M.state.help_win = win
 end
@@ -1563,14 +1581,12 @@ function M.show_sidebar(requests, opts)
 	local entries = sidebar_entries(requests)
 	M.state.sidebar_entries = entries
 
-	-- Nerd-Font icon detection: prefer Nerd glyphs when a Nerd Font is active
-	local has_nerd = vim.g.nerdfont == true
-			or (vim.o.guifont and vim.o.guifont:lower():find("nerd"))
-		or false
-	local icon_check = has_nerd and "" or "✓"
-	local icon_cross = has_nerd and "" or "✗"
-	local icon_star = has_nerd and "" or "★"
-	local icon_star_off = has_nerd and "" or "☆"
+	-- Central icon set: nerd glyphs when configured, ASCII on minimal
+	-- terminals, portable unicode otherwise (see tuiter.icons).
+	local glyphs = require("tuiter.icons").get()
+	local icon_check = glyphs.ok
+	local icon_cross = glyphs.err
+	local icon_star = glyphs.star
 
 	local buf = mk_buf()
 	local lines = {}
@@ -1584,10 +1600,15 @@ function M.show_sidebar(requests, opts)
 		end
 	end
 	local in_favs = true
+	-- buffer line -> request entry (the ★ separator line maps to false, so
+	-- cursor actions never mis-index when favorites are listed first)
+	local line_entries = {}
+	M.state.sidebar_line_entries = line_entries
 	for _, r in ipairs(entries) do
 		-- separator between favorites and non-favorites
 		if in_favs and not M.state.favs[r.url] and nonfav_count > 0 and fav_count > 0 then
-			lines[#lines + 1] = string.rep("─", 56)
+			lines[#lines + 1] = string.rep(glyphs.sep, 56)
+			line_entries[#lines] = false
 			vim.api.nvim_buf_add_highlight(buf, -1, "TuiterSep", #lines - 1, 0, -1)
 			in_favs = false
 		end
@@ -1609,6 +1630,7 @@ function M.show_sidebar(requests, opts)
 		local label = r.name ~= "" and r.name or r.url
 		local url = r.name ~= "" and r.url or ""
 		lines[#lines + 1] = string.format("%s %-14s %-6s %-24s %s", star, mark, r.method, trunc(label, 24), trunc(url, 20))
+		line_entries[#lines] = r
 	end
 	vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
 	-- highlight entries (track buf line separately from entry index due to separator)
@@ -1654,7 +1676,7 @@ function M.show_sidebar(requests, opts)
 		vim.wo[win].signcolumn = "no"
 		vim.wo[win].cursorline = true
 		-- window title + key hints via statusline
-		local hint = "↵ run │ ★ fav │ / filter │ e env │ a all │ ? help"
+		local hint = glyphs.arrow .. " run │ " .. glyphs.star .. " fav │ / filter │ e env │ a all │ ? help"
 		vim.wo[win].statusline = "%#TuiterStatusHint# " .. title .. " %*│ %#TuiterFooterKey#" .. hint .. "%*"
 	else
 		-- float mode (default)
@@ -1673,7 +1695,7 @@ function M.show_sidebar(requests, opts)
 			"%#TuiterStatusHint# q=close  <CR>=run  g=go-to-file  *=favorite  /=filter  e=env  a=run-all  c=copy-curl  ?=help %*"
 	end
 
-	buf_map(buf, "q", M.close_sidebar, "Close request list")
+	dismiss(buf, M.close_sidebar, "Close request list")
 	buf_map(buf, "?", M.toggle_help, "Show keymap help")
 	buf_map(buf, "e", function()
 		if opts.switch_env then
@@ -1687,19 +1709,19 @@ function M.show_sidebar(requests, opts)
 	end, "Filter requests")
 	buf_map(buf, "<CR>", function()
 		-- keep the sidebar open, like Insomnia's collection list
-		local spec = M.state.sidebar_entries[vim.api.nvim_win_get_cursor(0)[1]]
+		local spec = (M.state.sidebar_line_entries or {})[vim.api.nvim_win_get_cursor(0)[1]]
 		if spec and opts.run then
 			opts.run(spec)
 		end
 	end, "Run request")
 	buf_map(buf, "g", function()
-		local spec = M.state.sidebar_entries[vim.api.nvim_win_get_cursor(0)[1]]
+		local spec = (M.state.sidebar_line_entries or {})[vim.api.nvim_win_get_cursor(0)[1]]
 		if spec and opts.go_to then
 			opts.go_to(spec.line)
 		end
 	end, "Go to request in file")
 	buf_map(buf, "*", function()
-		local spec = M.state.sidebar_entries[vim.api.nvim_win_get_cursor(0)[1]]
+		local spec = (M.state.sidebar_line_entries or {})[vim.api.nvim_win_get_cursor(0)[1]]
 		if spec then
 			M.toggle_fav(spec.url)
 		end
@@ -1725,21 +1747,31 @@ end
 
 --- results: { { spec = spec, resp = resp } } — shown with status colors.
 function M.show_run_summary(results, opts)
+	M.close_spinner() -- run-all never shows a response window, so kill the spinner here
 	if is_valid(M.state.summary_win) then
 		pcall(vim.api.nvim_win_close, M.state.summary_win, true)
 	end
+	local glyphs = require("tuiter.icons").get()
 	local buf = mk_buf()
 	local lines = {}
+	-- buffer line -> result entry (assertion sub-lines map to their request,
+	-- so <CR> always jumps to the right request)
+	local line_entries = {}
+	local failed_specs = {}
 	for i, entry in ipairs(results) do
 		if entry.skipped then
 			local label = entry.spec.name ~= "" and entry.spec.name or entry.spec.url
-			lines[#lines + 1] = string.format("⏭  %-6s %s", entry.spec.method or "", trunc(label, 24))
+			lines[#lines + 1] = string.format("%s  %-6s %s", glyphs.skip, entry.spec.method or "", trunc(label, 24))
+			line_entries[#lines] = entry
 			vim.api.nvim_buf_add_highlight(buf, -1, "Comment", #lines - 1, 0, -1)
 		else
 			local resp = entry.resp
 			local failed = (resp.failures or 0) > 0
 			local ok = (resp.ok and resp.status < 400) and not failed
-			local icon = ok and "✓" or "✗"
+			local icon = ok and glyphs.ok or glyphs.err
+			if not ok then
+				failed_specs[#failed_specs + 1] = entry.spec
+			end
 			local tag = failed and " (tests failed)" or ""
 			local status = string.format(
 				"%s %-3s %-6s %-24s · %dms · %s%s",
@@ -1752,18 +1784,20 @@ function M.show_run_summary(results, opts)
 				tag
 			)
 			lines[#lines + 1] = status
+			line_entries[#lines] = entry
 			local hl = ok and "TuiterOk" or "TuiterError"
 			local line_no = #lines
 			vim.api.nvim_buf_add_highlight(buf, -1, hl, line_no - 1, 0, -1)
 			-- indent failed assertions under their request
 			if resp.tests and #resp.tests > 0 then
 				for _, te in ipairs(resp.tests) do
-					local mark = te.pass and "✓" or "✗"
+					local mark = te.pass and glyphs.ok or glyphs.err
 					local l = "    " .. mark .. " " .. te.expr
 					if te.actual ~= nil then
 						l = l .. "  · got: " .. trunc(fmt_actual(te.actual), 50)
 					end
 					lines[#lines + 1] = l
+					line_entries[#lines] = entry
 					vim.api.nvim_buf_add_highlight(buf, -1, te.pass and "Comment" or "TuiterError", #lines - 1, 0, -1)
 				end
 			end
@@ -1789,21 +1823,32 @@ function M.show_run_summary(results, opts)
 		title = " tuiter — run results ",
 		title_pos = "center",
 	})
-	buf_map(buf, "q", function()
+	local function close_summary()
 		pcall(vim.api.nvim_win_close, win, true)
 		M.state.summary_win = nil
-	end, "Close results")
+	end
+	dismiss(buf, close_summary, "Close results")
 	if opts then
 		buf_map(buf, "<CR>", function()
 			local i = vim.api.nvim_win_get_cursor(0)[1]
-			local entry = results[i]
-			if entry and opts.buf and vim.api.nvim_buf_is_valid(opts.buf) then
-				pcall(vim.api.nvim_win_close, win, true)
-				M.state.summary_win = nil
+			local entry = line_entries[i]
+			if entry and entry.spec and opts.buf and vim.api.nvim_buf_is_valid(opts.buf) then
+				close_summary()
 				vim.api.nvim_set_current_buf(opts.buf)
 				vim.api.nvim_win_set_cursor(0, { entry.spec.line, 0 })
 			end
 		end, "Jump to request")
+		if #failed_specs > 0 and opts.rerun then
+			buf_map(buf, "r", function()
+				close_summary()
+				opts.rerun(failed_specs)
+			end, "Re-run failed requests")
+		end
+		if opts.junit then
+			buf_map(buf, "J", function()
+				opts.junit()
+			end, "Export JUnit XML")
+		end
 	end
 	M.state.summary_win = win
 end

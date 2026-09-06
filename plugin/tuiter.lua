@@ -7,6 +7,10 @@ vim.api.nvim_create_user_command("Tuiter", function()
 	require("tuiter").sidebar()
 end, { desc = "Toggle the tuiter request sidebar" })
 
+vim.api.nvim_create_user_command("TuiterSidebar", function()
+	require("tuiter").float_sidebar()
+end, { desc = "Toggle the tuiter floating request sidebar (always available)" })
+
 vim.api.nvim_create_user_command("TuiterRun", function(a)
 	local lnum = tonumber(a.args)
 	require("tuiter").run(lnum and { lnum = lnum } or {})
@@ -156,11 +160,11 @@ end, {
 vim.api.nvim_create_user_command("TelescopeTuiter", function(a)
 	local parts = vim.split(a.args, "%s+")
 	local picker = parts[1] or "requests"
-	local ok, pickers = pcall(require, "tuiter.pickers")
-	if not ok then
+	if not require("tuiter").has_telescope() then
 		vim.notify("Tuiter: telescope.nvim not available", vim.log.levels.ERROR, { title = "Tuiter" })
 		return
 	end
+	local pickers = require("tuiter.pickers")
 	if picker == "requests" then
 		pickers.requests()
 	elseif picker == "history" then

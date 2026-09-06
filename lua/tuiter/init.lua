@@ -5,6 +5,7 @@ local parser = require("tuiter.parser")
 local client = require("tuiter.client")
 local ui = require("tuiter.ui")
 local history = require("tuiter.history")
+local icons = require("tuiter.icons")
 local codegen = require("tuiter.codegen")
 local collections = require("tuiter.collections")
 local templates = require("tuiter.templates")
@@ -29,6 +30,7 @@ local config = {
 	curl = { timeout = 30, insecure = false, max_redirects = 8, cookie_jar = true, compressed = true },
 	env_files = { "http-client.env.json", "tuiter.env.json" },
 	default_env = "default",
+	icons = "auto", -- "auto" (portable unicode) | "nerd" (Nerd Font glyphs) | "ascii"
 	run_all = { concurrency = 1, delay = 150 },
 	windows = { layout = "float", response_side = "right", width = 120, max_height = 40, sidebar_width = 62, compact = false },
 }
@@ -36,6 +38,7 @@ local config = {
 ---@param opts? table
 function M.setup(opts)
 	config = vim.tbl_deep_extend("force", config, opts or {})
+	icons.set(config.icons)
 	-- LazyVim/which-key group label for the <leader>i prefix (no-op without which-key)
 	pcall(function()
 		local wk = require("which-key")
@@ -156,7 +159,17 @@ function M.run_all(opts)
 				opts.on_done(results)
 			end
 			if not opts.no_summary then
-				ui.show_run_summary(results, { buf = buf })
+				ui.show_run_summary(results, {
+					buf = buf,
+					rerun = function(specs)
+						for _, spec in ipairs(specs) do
+							M.resend(spec)
+						end
+					end,
+					junit = function()
+						M.junit()
+					end,
+				})
 			end
 		end)
 	end
@@ -234,16 +247,18 @@ function M.jump_request(dir)
 	vim.api.nvim_win_set_cursor(0, { requests[target].line, 0 })
 end
 
---- Open (or close) the request sidebar for the current .http buffer.
---- Uses Telescope when available, falls back to floating sidebar.
-function M.sidebar()
-	-- Try Telescope first
-	local ok, pickers = pcall(require, "tuiter.pickers")
-	if ok then
-		pickers.requests()
-		return
-	end
-	-- Fallback to floating sidebar
+--- True when Telescope's picker engine can load. Note: probing
+--- `tuiter.pickers` is wrong — that module loads fine without Telescope
+--- and only fails later inside `lazy()`.
+---@return boolean
+function M.has_telescope()
+	return pcall(require, "telescope.pickers")
+end
+
+--- Open (or close) the floating request sidebar for the current .http buffer
+--- (favorites divider, `tag:` filter, run-all). Always available, even when
+--- Telescope is installed. `:TuiterSidebar`.
+function M.float_sidebar()
 	if ui.sidebar_is_open() then
 		ui.close_sidebar()
 		return
@@ -287,13 +302,23 @@ function M.sidebar()
 	open()
 end
 
+--- Open (or close) the request sidebar for the current .http buffer.
+--- Uses Telescope when available, falls back to the floating sidebar.
+function M.sidebar()
+	-- Try Telescope first
+	if M.has_telescope() then
+		require("tuiter.pickers").requests()
+		return
+	end
+	M.float_sidebar()
+end
+
 --- Pick a past request from history and re-run it.
 --- Uses Telescope when available, falls back to vim.ui.select.
 function M.history()
 	-- Try Telescope first
-	local ok, pickers = pcall(require, "tuiter.pickers")
-	if ok then
-		pickers.history()
+	if M.has_telescope() then
+		require("tuiter.pickers").history()
 		return
 	end
 	-- Fallback
@@ -338,9 +363,8 @@ function M.select_env(opts, on_select)
 		return
 	end
 	-- Try Telescope first
-	local ok, pickers = pcall(require, "tuiter.pickers")
-	if ok then
-		pickers.env()
+	if M.has_telescope() then
+		require("tuiter.pickers").env()
 		return
 	end
 	-- Fallback
@@ -396,11 +420,16 @@ function M.complete(findstart, base)
 	return client.complete(findstart, base)
 end
 
---- Statusline component for lualine/statuscol (e.g. "env: dev · HTTP 200").
+--- Statusline component for lualine/statuscol
+--- (e.g. "env: dev (tuiter.env.json) · HTTP 200").
 function M.statusline()
 	local parts = {}
 	if client.state.env then
-		parts[#parts + 1] = "env: " .. client.state.env
+		local label = "env: " .. client.state.env
+		if client.state.env_file then
+			label = label .. " (" .. vim.fn.fnamemodify(client.state.env_file, ":t") .. ")"
+		end
+		parts[#parts + 1] = label
 	end
 	local r = client.state.response
 	if r and r.status and r.status > 0 then
@@ -475,20 +504,28 @@ function M.setup_keymaps(buf)
 			end
 		end, "Open request URL in browser")
 	end
-	-- Telescope-specific keymaps
-	local function telescope_map(lhs, picker, desc)
+	-- Telescope-specific keymaps (each with a vim.ui.select fallback so the
+	-- keys stay useful on setups without telescope.nvim)
+	local function telescope_map(lhs, picker, desc, fallback)
 		map(lhs, function()
-			local ok, pickers = pcall(require, "tuiter.pickers")
-			if ok then
-				pickers[picker]()
+			if M.has_telescope() then
+				require("tuiter.pickers")[picker]()
+			elseif fallback then
+				fallback()
 			else
 				vim.notify("Tuiter: telescope.nvim not available", vim.log.levels.WARN, { title = "Tuiter" })
 			end
 		end, desc)
 	end
-	telescope_map("<leader>iq", "commands", "Command picker (Telescope)")
-	telescope_map("<leader>it", "templates", "Template picker (Telescope)")
-	telescope_map("<leader>ib", "collections", "Collection picker (Telescope)")
+	telescope_map("<leader>iq", "commands", "Command picker (Telescope)", function()
+		M.commands()
+	end)
+	telescope_map("<leader>it", "templates", "Template picker (Telescope)", function()
+		M.snippet_list()
+	end)
+	telescope_map("<leader>ib", "collections", "Collection picker (Telescope)", function()
+		M.collection_list()
+	end)
 end
 
 -- ---------------------------------------------------------------------------
@@ -897,6 +934,22 @@ function M.collection_list()
 			if #choice.files > 0 then
 				vim.cmd("edit " .. vim.fn.fnameescape(choice.files[1].path))
 			end
+		end
+	end)
+end
+
+--- Pick a tuiter command without Telescope (`vim.ui.select` fallback for
+--- the `commands` picker).
+function M.commands()
+	local items = require("tuiter.pickers").command_items()
+	vim.ui.select(items, {
+		prompt = "Tuiter command",
+		format_item = function(c)
+			return ":" .. c.cmd .. " — " .. c.desc
+		end,
+	}, function(choice)
+		if choice then
+			vim.cmd(choice.cmd)
 		end
 	end)
 end

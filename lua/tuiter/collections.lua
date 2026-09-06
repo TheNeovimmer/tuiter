@@ -175,21 +175,32 @@ function M.read_env(collection_path)
 end
 
 --- Parse tags from a request spec.
+--- The parser stores `# @tag a,b` in `spec.opts.tag`; older specs may
+--- carry a `spec.directives` list instead. Both shapes are accepted.
 ---@param spec table
 ---@return string[]
 function M.parse_tags(spec)
 	local tags = {}
+	local function add(raw)
+		if type(raw) ~= "string" then
+			return
+		end
+		for tag in raw:gmatch("[^,]+") do
+			tag = vim.trim(tag)
+			if tag ~= "" then
+				table.insert(tags, tag)
+			end
+		end
+	end
 	if spec.directives then
 		for _, dir in ipairs(spec.directives) do
 			if dir.name == "tag" then
-				for tag in dir.value:gmatch("[^,]+") do
-					tag = vim.trim(tag)
-					if tag ~= "" then
-						table.insert(tags, tag)
-					end
-				end
+				add(dir.value)
 			end
 		end
+	end
+	if spec.opts then
+		add(spec.opts.tag)
 	end
 	return tags
 end

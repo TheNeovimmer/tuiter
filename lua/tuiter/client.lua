@@ -59,11 +59,27 @@ local function env_file_for(dir, opts)
 	return nil
 end
 
+-- paths already warned about (a broken env file notifies once, not per send)
+local warned_bad_env = {}
+
 local function read_env_file(path)
 	local ok, decoded = pcall(vim.json.decode, table.concat(vim.fn.readfile(path), "\n"))
 	if not ok or type(decoded) ~= "table" then
+		if not warned_bad_env[path] then
+			warned_bad_env[path] = true
+			vim.notify(
+				"Tuiter: could not parse env file "
+					.. path
+					.. " ("
+					.. tostring(decoded)
+					.. "); check the JSON — using an empty env",
+				vim.log.levels.WARN,
+				{ title = "Tuiter" }
+			)
+		end
 		return {}
 	end
+	warned_bad_env[path] = nil
 	return decoded
 end
 
@@ -861,9 +877,31 @@ local function do_send(spec, curl_opts, cwd, cb)
 	M.state.procs[proc] = true
 end
 
+--- Globals available to `# @before` / `# @after` scripts beyond the
+--- documented helpers. Deliberately excludes `io`, `os`, `require`,
+--- `debug`, `load`/`loadfile`/`dofile` and all `vim.*` access: scripts must
+--- not be able to touch the filesystem, network, or editor state.
+local SAFE_SCRIPT_GLOBALS = {
+	pairs = pairs,
+	ipairs = ipairs,
+	tostring = tostring,
+	tonumber = tonumber,
+	type = type,
+	error = error,
+	assert = assert,
+	select = select,
+	unpack = unpack or table.unpack,
+	pcall = pcall,
+	string = string,
+	table = table,
+	math = math,
+}
+
 --- Run a `# @before` / `# @after` Lua script. The script runs in a sandbox
---- with access to `request`, `response` (after only), `set_header`, `set_var`,
---- `set_env`, and `print` (collected into notify). Returns true on success.
+--- with access to `request`, `response` (after only), `status`, `body`,
+--- `json`, `set_header`, `set_var`, `set_env`, and `print` (collected into
+--- notify), plus a safe subset of the Lua stdlib (string/table/math and
+--- basics). Returns true on success.
 local function run_script(code, context)
 	if not code or code == "" then
 		return true
@@ -899,7 +937,20 @@ local function run_script(code, context)
 			return pcall(vim.json.decode, s or "")
 		end,
 	}
-	setmetatable(env, { __index = _G })
+	setmetatable(env, {
+		__index = function(_, k)
+			local v = SAFE_SCRIPT_GLOBALS[k]
+			if v ~= nil then
+				return v
+			end
+			error(
+				"Tuiter script: '"
+					.. tostring(k)
+					.. "' is not available in the sandbox (only request/response/status/body/json/set_header/set_var/set_env/print and basic string/table/math helpers)",
+				2
+			)
+		end,
+	})
 	local fn, load_err = load(code, "@tuiter-script", "t", env)
 	if not fn then
 		vim.notify("Tuiter script error: " .. tostring(load_err), vim.log.levels.ERROR, { title = "Tuiter" })

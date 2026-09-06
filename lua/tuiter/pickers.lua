@@ -102,7 +102,7 @@ local function format_request(r)
 	local favs = load_favs()
 	local stats = load_stats()
 	local key = r.method .. " " .. r.url
-	local fav = favs[key] and "★ " or "  "
+	local fav = favs[key] and (require("tuiter.icons").get().star .. " ") or "  "
 	local freq = stats.frequency[key] or 0
 	local last = stats.recency[key]
 	local recency = last and os.date("%m-%d %H:%M", last) or ""
@@ -131,7 +131,7 @@ local function request_entry_maker(opts)
 			display = function(entry)
 				local method_hl = METHOD_COLORS[r.method] or "Comment"
 				return displayer({
-					{ fav and "★" or " ", fav and "Constant" or "Comment" },
+					{ fav and require("tuiter.icons").get().star or " ", fav and "Constant" or "Comment" },
 					{ r.method, method_hl },
 					{ truncate(r.name ~= "" and r.name or r.url, 24), "Identifier" },
 					{ r.name ~= "" and truncate(r.url, 30) or "", "Comment" },
@@ -367,7 +367,7 @@ function M.requests(opts)
 					if entry then
 						action_state.toggle_selection(prompt_bufnr)
 						actions.move_selection_previous(prompt_bufnr)
-					end)
+					end
 				end)
 
 				-- Run all selected
@@ -692,9 +692,11 @@ end
 -- Picker: commands
 -- ---------------------------------------------------------------------------
 
-function M.commands()
-	lazy()
-	local commands = {
+--- The command catalogue (no Telescope needed to build it). Shared by the
+--- Telescope `commands` picker and the `vim.ui.select` fallback.
+---@return table[] { cmd, desc, keymap? }
+function M.command_items()
+	return {
 		{ cmd = "TuiterRun", desc = "Send request under cursor", keymap = "<leader>is" },
 		{ cmd = "TuiterRunAll", desc = "Run all requests", keymap = "<leader>ia" },
 		{ cmd = "TuiterCancel", desc = "Cancel in-flight requests", keymap = "<leader>ic" },
@@ -713,9 +715,14 @@ function M.commands()
 		{ cmd = "TuiterImportPostman", desc = "Convert Postman collection to .http" },
 		{ cmd = "TuiterImportOpenapi", desc = "Convert OpenAPI spec to .http" },
 		{ cmd = "TuiterImportCurl", desc = "Paste curl command → .http buffer" },
-		{ cmd = "TuiterCollection", desc = "Manage request collections", keymap = "<leader>ic" },
+		{ cmd = "TuiterCollection", desc = "Manage request collections", keymap = "<leader>ib" },
 		{ cmd = "TuiterSnippet", desc = "Manage request templates", keymap = "<leader>it" },
 	}
+end
+
+function M.commands()
+	lazy()
+	local commands = M.command_items()
 
 	pickers
 		.new({}, {
