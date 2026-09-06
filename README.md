@@ -8,7 +8,6 @@
 ![Deps](https://img.shields.io/badge/deps-zero-lightgrey)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 
-📖 **[Full handbook](https://theneovimmer.github.io/tuiter)** ·
 ⚡ **[Quickstart](#-quickstart)** ·
 🔧 **[Configuration](#-configuration)**
 
